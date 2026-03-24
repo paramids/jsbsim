@@ -5,6 +5,19 @@
 
  ------------- Copyright (C) 2025 JSBSim contributors -------------
 
+FUNCTIONAL DESCRIPTION
+--------------------------------------------------------------------------------
+
+Two thermodynamic sides (same model as FGTurboProp: N1, EnginePowerRPM_N1, ITT,
+PSFC, etc.) share one FGRotor thruster.  maxpower in XML is per side; shaft
+power is HP_side[0] + HP_side[1], then Thruster->Calculate(total * hptoftlbssec).
+
+Phases (ttOff / ttRun / ttSpinUp / ttStart / ttTrim) are tracked per side.
+Propeller beta/reverse paths are omitted; IELU uses main-rotor torque only.
+
+Optional <independent_throttles> ties throttle-norm-side-0/1; otherwise both
+sides follow in.ThrottlePos[EngineNumber].
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 INCLUDES
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
@@ -23,6 +36,10 @@ using namespace std;
 
 namespace JSBSim {
 
+/*%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+CLASS IMPLEMENTATION
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
+
 FGTwinTurboshaft::FGTwinTurboshaft(FGFDMExec* exec, Element* el, int engine_number,
                                   struct Inputs& input)
   : FGEngine(engine_number, input)
@@ -32,10 +49,12 @@ FGTwinTurboshaft::FGTwinTurboshaft(FGFDMExec* exec, Element* el, int engine_numb
   Debug(0);
 }
 
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 bool FGTwinTurboshaft::Load(FGFDMExec* exec, Element* el)
 {
-  MaxStartingTime = 999999;
-  Ielu_max_torque = -1;
+  MaxStartingTime = 999999; // default: no spin-up timeout
+  Ielu_max_torque = -1;     // negative: IELU disabled until XML sets ielumaxtorque
 
   Element* function_element = el->FindElement("function");
   while (function_element) {
@@ -45,7 +64,7 @@ bool FGTwinTurboshaft::Load(FGFDMExec* exec, Element* el)
     function_element = el->FindNextElement("function");
   }
 
-  FGEngine::Load(exec, el);
+  FGEngine::Load(exec, el); // loads thruster from parent <engine>; must be rotor
 
   if (Thruster->GetType() != FGThruster::ttRotor) {
     cerr << el->ReadFrom()
@@ -120,11 +139,16 @@ bool FGTwinTurboshaft::Load(FGFDMExec* exec, Element* el)
   return true;
 }
 
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// Each frame: resolve throttles, update phases, run Side*() for both turbines,
+// sum HP and fuel, drive the single rotor with combined shaft power.
+
 void FGTwinTurboshaft::Calculate(void)
 {
   RunPreFunctions();
   Cranking = false;
 
+  // IELU uses ThrottlePos; independent mode also tracks per-side norms for thermo.
   if (independent_throttles) {
     ThrottlePos = 0.5 * (ThrottleNormSide[0] + ThrottleNormSide[1]);
   } else {
@@ -133,7 +157,7 @@ void FGTwinTurboshaft::Calculate(void)
     ThrottlePos = t;
   }
 
-  RPM = Thruster->GetEngineRPM();
+  RPM = Thruster->GetEngineRPM(); // same shaft for both sides
 
   UpdatePhasesBeforePower();
   ApplyIelu();
@@ -170,11 +194,14 @@ void FGTwinTurboshaft::Calculate(void)
 
   LoadThrusterInputs();
   double power = HP * hptoftlbssec;
-  if (RPM <= 0.1) power = max(power, 0.0);
+  if (RPM <= 0.1) power = max(power, 0.0); // mirror FGTurboProp: no negative power at standstill
   Thruster->Calculate(power);
 
   RunPostFunctions();
 }
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// Per-side "off": windmilling N1, ITT toward ambient, no combustor fuel.
 
 double FGTwinTurboshaft::SideOff(int s)
 {
@@ -189,9 +216,12 @@ double FGTwinTurboshaft::SideOff(int s)
                     + ((N1[s] > 20) ? 0.0 : (20 - N1[s]) / 20.0 * Eng_Temperature[s]);
   Eng_ITT_degC[s] = ExpSeek(&Eng_ITT_degC[s], ITT_goal, ITT_Delay, ITT_Delay * 1.2);
 
-  if (RPM > 5) return -0.012;
+  if (RPM > 5) return -0.012; // small negative HP: engine friction when rotor windmills
   return 0.0;
 }
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// Per-side "running": same power/fuel/ITT path as FGTurboProp::Run.
 
 double FGTwinTurboshaft::SideRun(int s, double throttlePos)
 {
@@ -219,6 +249,9 @@ double FGTwinTurboshaft::SideRun(int s, double throttlePos)
 
   return EngPower_HP;
 }
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// Per-side starter spin-up (GeneratorPower required, same as turboprop).
 
 double FGTwinTurboshaft::SideSpinUp(int s)
 {
@@ -254,6 +287,9 @@ double FGTwinTurboshaft::SideSpinUp(int s)
   return EngPower_HP;
 }
 
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// Light-off once N1 > 15%; below IdleN1 burns fuel until spool-up completes.
+
 double FGTwinTurboshaft::SideStart(int s)
 {
   double EngPower_HP = 0.0;
@@ -284,6 +320,9 @@ double FGTwinTurboshaft::SideStart(int s)
 
   return EngPower_HP;
 }
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// Phase transitions (mirrors FGTurboProp logic, applied independently per side).
 
 void FGTwinTurboshaft::UpdatePhasesBeforePower(void)
 {
@@ -322,7 +361,7 @@ void FGTwinTurboshaft::UpdatePhasesBeforePower(void)
   }
 
   if (in.TotalDeltaT == 0) {
-    for (int s = 0; s < NSides; ++s) phase[s] = ttTrim;
+    for (int s = 0; s < NSides; ++s) phase[s] = ttTrim; // trim pass: hold until integration resumes
   }
 
   if (Starved) {
@@ -336,6 +375,10 @@ void FGTwinTurboshaft::UpdatePhasesBeforePower(void)
     }
   }
 }
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// Torque limiter: reduces commanded throttle(s) when main rotor torque exceeds
+// ielumaxtorque (disabled if ielumaxtorque <= 0).
 
 void FGTwinTurboshaft::ApplyIelu(void)
 {
@@ -373,6 +416,9 @@ void FGTwinTurboshaft::ApplyIelu(void)
   OldThrottle = ThrottlePos;
 }
 
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+// Single oil model from average N1 (avoids double-applying oil dynamics per side).
+
 void FGTwinTurboshaft::UpdateOil(double n1_avg)
 {
   if (n1_avg > 25.0)
@@ -385,6 +431,8 @@ void FGTwinTurboshaft::UpdateOil(double n1_avg)
     / 7692.0e-6;
 }
 
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 double FGTwinTurboshaft::CalcFuelNeed(void)
 {
   FuelFlowRate = FuelFlow_pph / 3600.0;
@@ -392,6 +440,8 @@ double FGTwinTurboshaft::CalcFuelNeed(void)
   if (!Starved) FuelUsedLbs += FuelExpended;
   return FuelExpended;
 }
+
+// Same ramp helpers as FGTurboProp (linear / first-order lag).
 
 double FGTwinTurboshaft::Seek(double* var, double target, double accel, double decel)
 {
@@ -416,6 +466,8 @@ double FGTwinTurboshaft::ExpSeek(double* var, double target, double accel_tau, d
   }
   return v;
 }
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 void FGTwinTurboshaft::SetDefaults(void)
 {
@@ -465,6 +517,8 @@ void FGTwinTurboshaft::SetCondition(int side, int c)
   if (side >= 0 && side < NSides) Condition[side] = c;
 }
 
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 string FGTwinTurboshaft::GetEngineLabels(const string& delimiter)
 {
   ostringstream buf;
@@ -497,6 +551,9 @@ int FGTwinTurboshaft::InitRunning(void)
   return (phase[0] == ttRun) && (phase[1] == ttRun);
 }
 
+// throttle-norm-side-* are only tied when XML requests independent_throttles;
+// otherwise both sides track FCS throttle via in.ThrottlePos in Calculate().
+
 void FGTwinTurboshaft::bindmodel(FGPropertyManager* PropertyManager, bool independent_throttle_bind)
 {
   string base = CreateIndexedPropertyName("propulsion/engine", EngineNumber);
@@ -519,6 +576,8 @@ void FGTwinTurboshaft::bindmodel(FGPropertyManager* PropertyManager, bool indepe
     PropertyManager->Tie((base + "/throttle-norm-side-1").c_str(), &ThrottleNormSide[1]);
   }
 }
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 void FGTwinTurboshaft::Debug(int from)
 {
