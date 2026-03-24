@@ -133,7 +133,8 @@ public:
   FGEngine(int engine_number, struct Inputs& input);
   ~FGEngine() override;
 
-  enum EngineType {etUnknown, etRocket, etPiston, etTurbine, etTurboprop, etElectric};
+  enum EngineType {etUnknown, etRocket, etPiston, etTurbine, etTurboprop, etElectric,
+                   etTwinTurboshaft};
 
   EngineType GetType(void) const { return Type; }
   virtual const std::string&  GetName(void) const { return Name; }

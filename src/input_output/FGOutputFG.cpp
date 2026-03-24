@@ -248,6 +248,8 @@ void FGOutputFG::SocketDataFill(FGNetFDM* net)
       break;
     case (FGEngine::etTurboprop):
       break;
+    case (FGEngine::etTwinTurboshaft):
+      break;
     case (FGEngine::etElectric):
       net->rpm[i] = static_cast<float>(static_pointer_cast<FGElectric>(engine)->getRPM());
       break;

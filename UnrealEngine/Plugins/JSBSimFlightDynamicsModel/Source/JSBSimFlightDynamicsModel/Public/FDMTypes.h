@@ -125,7 +125,8 @@ enum class EEngineType : uint8 {
 	Piston,
 	Turbine,
 	Turboprop,
-	Electric
+	Electric,
+	TwinTurboshaft
 };
 
 UENUM(BlueprintType)

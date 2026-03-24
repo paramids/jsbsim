@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Header Files">
@@ -273,6 +273,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\models\propulsion\FGTurboProp.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\models\propulsion\FGTwinTurboshaft.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\input_output\FGXMLElement.cpp">
@@ -629,6 +632,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\models\propulsion\FGTurboProp.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\models\propulsion\FGTwinTurboshaft.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\input_output\FGXMLElement.h">

@@ -57,6 +57,7 @@ INCLUDES
 #include "models/propulsion/FGPiston.h"
 #include "models/propulsion/FGElectric.h"
 #include "models/propulsion/FGTurboProp.h"
+#include "models/propulsion/FGTwinTurboshaft.h"
 #include "models/propulsion/FGTank.h"
 #include "models/propulsion/FGBrushLessDCMotor.h"
 #include "models/FGFCS.h"
@@ -412,6 +413,9 @@ bool FGPropulsion::Load(Element* el)
       } else if (engine_element->FindElement("turboprop_engine")) {
         Element *element = engine_element->FindElement("turboprop_engine");
         Engines.push_back(make_shared<FGTurboProp>(FDMExec, element, numEngines, in));
+      } else if (engine_element->FindElement("twin_turboshaft_engine")) {
+        Element *element = engine_element->FindElement("twin_turboshaft_engine");
+        Engines.push_back(make_shared<FGTwinTurboshaft>(FDMExec, element, numEngines, in));
       } else if (engine_element->FindElement("rocket_engine")) {
         Element *element = engine_element->FindElement("rocket_engine");
         Engines.push_back(make_shared<FGRocket>(FDMExec, element, numEngines, in));
@@ -683,6 +687,9 @@ void FGPropulsion::SetCutoff(int setting)
         case FGEngine::etTurboprop:
           static_pointer_cast<FGTurboProp>(engine)->SetCutoff(bsetting);
           break;
+        case FGEngine::etTwinTurboshaft:
+          static_pointer_cast<FGTwinTurboshaft>(engine)->SetCutoff(bsetting);
+          break;
         default:
           break;
       }
@@ -695,6 +702,9 @@ void FGPropulsion::SetCutoff(int setting)
         break;
       case FGEngine::etTurboprop:
         static_pointer_cast<FGTurboProp>(engine)->SetCutoff(bsetting);
+        break;
+      case FGEngine::etTwinTurboshaft:
+        static_pointer_cast<FGTwinTurboshaft>(engine)->SetCutoff(bsetting);
         break;
       default:
         break;
@@ -717,6 +727,9 @@ int FGPropulsion::GetCutoff(void) const
       case FGEngine::etTurboprop:
         cutoff &= static_pointer_cast<FGTurboProp>(engine)->GetCutoff();
         break;
+      case FGEngine::etTwinTurboshaft:
+        cutoff &= static_pointer_cast<FGTwinTurboshaft>(engine)->GetCutoff();
+        break;
       default:
         return -1;
       }
@@ -730,6 +743,8 @@ int FGPropulsion::GetCutoff(void) const
       return static_pointer_cast<FGTurbine>(engine)->GetCutoff() ? 1 : 0;
     case FGEngine::etTurboprop:
       return static_pointer_cast<FGTurboProp>(engine)->GetCutoff() ? 1 : 0;
+    case FGEngine::etTwinTurboshaft:
+      return static_pointer_cast<FGTwinTurboshaft>(engine)->GetCutoff() ? 1 : 0;
     default:
       break;
     }
@@ -827,6 +842,7 @@ void FGPropulsion::bind(void)
     if (!HavePistonEngine && engine->GetType() == FGEngine::etPiston) HavePistonEngine = true;
     if (!HaveTurboEngine && engine->GetType() == FGEngine::etTurbine) HaveTurboEngine = true;
     if (!HaveTurboEngine && engine->GetType() == FGEngine::etTurboprop) HaveTurboEngine = true;
+    if (!HaveTurboEngine && engine->GetType() == FGEngine::etTwinTurboshaft) HaveTurboEngine = true;
   }
 
   PropertyManager->Tie<FGPropulsion, int>("propulsion/set-running", this, nullptr,

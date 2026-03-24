@@ -67,6 +67,7 @@
 #include <FDM/JSBSim/models/propulsion/FGPiston.h>
 #include <FDM/JSBSim/models/propulsion/FGTurbine.h>
 #include <FDM/JSBSim/models/propulsion/FGTurboProp.h>
+#include <FDM/JSBSim/models/propulsion/FGTwinTurboshaft.h>
 #include <FDM/JSBSim/models/propulsion/FGRocket.h>
 #include <FDM/JSBSim/models/propulsion/FGElectric.h>
 #include <FDM/JSBSim/models/propulsion/FGNozzle.h>
@@ -663,6 +664,14 @@ bool FGJSBsim::copy_to_JSBsim()
         eng->SetCondition( globals->get_controls()->get_condition(i) );
         break;
         } // end FGTurboProp code block
+      case FGEngine::etTwinTurboshaft:
+        { // FGTwinTurboshaft code block
+        FGTwinTurboshaft* eng = (FGTwinTurboshaft*)Propulsion->GetEngine(i);
+        eng->SetCutoff( globals->get_controls()->get_cutoff(i) );
+        eng->SetGeneratorPower( globals->get_controls()->get_generator_breaker(i) );
+        eng->SetCondition( globals->get_controls()->get_condition(i) );
+        break;
+        } // end FGTwinTurboshaft code block
       default:
         break;
       }
@@ -900,6 +909,25 @@ bool FGJSBsim::copy_from_JSBsim()
         globals->get_controls()->set_reverser(i, eng->GetReversed() );
         globals->get_controls()->set_cutoff(i, eng->GetCutoff() );
         } // end FGTurboProp code block
+        break;
+      case FGEngine::etTwinTurboshaft:
+        { // FGTwinTurboshaft code block
+        FGTwinTurboshaft* eng = (FGTwinTurboshaft*)Propulsion->GetEngine(i);
+        node->setDoubleValue("n1", 0.5 * (eng->GetN1(0) + eng->GetN1(1)));
+        node->setDoubleValue("n1-side-0", eng->GetN1(0));
+        node->setDoubleValue("n1-side-1", eng->GetN1(1));
+        node->setDoubleValue("itt_degf", 32 + 0.5 * (eng->GetITT(0) + eng->GetITT(1)) * 9 / 5);
+        node->setDoubleValue("oil-pressure-psi", eng->getOilPressure_psi());
+        node->setBoolValue("reversed", false);
+        node->setBoolValue("cutoff", eng->GetCutoff());
+        node->setBoolValue("starting", eng->GetEngStarting());
+        node->setBoolValue("generator-power", eng->GetGeneratorPower());
+        node->setBoolValue("damaged", eng->GetCondition(0) != 0 || eng->GetCondition(1) != 0);
+        node->setBoolValue("ielu-intervent", eng->GetIeluIntervent());
+        node->setDoubleValue("oil-temperature-degf", eng->getOilTemp_degF());
+        globals->get_controls()->set_reverser(i, false );
+        globals->get_controls()->set_cutoff(i, eng->GetCutoff() );
+        } // end FGTwinTurboshaft code block
         break;
       case FGEngine::etElectric:
         { // FGElectric code block

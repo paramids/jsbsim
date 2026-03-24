@@ -37,6 +37,7 @@
 #include "models/propulsion/FGPiston.h"
 #include "models/propulsion/FGTurbine.h"
 #include "models/propulsion/FGTurboProp.h"
+#include "models/propulsion/FGTwinTurboshaft.h"
 #include "models/propulsion/FGTank.h"
 #include "initialization/FGInitialCondition.h"
 #include "initialization/FGTrim.h"
@@ -1040,6 +1041,14 @@ void UJSBSimMovementComponent::ApplyEnginesCommands()
       TurboPropEngine->SetCondition(EngineCommand.Condition);
       break;
     }
+    case JSBSim::FGEngine::etTwinTurboshaft:
+    {
+      std::shared_ptr < JSBSim::FGTwinTurboshaft> TwinEngine = std::static_pointer_cast<JSBSim::FGTwinTurboshaft>(Propulsion->GetEngine(i));
+      TwinEngine->SetCutoff(EngineCommand.CutOff);
+      TwinEngine->SetGeneratorPower(EngineCommand.GeneratorPower);
+      TwinEngine->SetCondition(EngineCommand.Condition);
+      break;
+    }
     default:
       break;
     }
@@ -1100,6 +1109,15 @@ void UJSBSimMovementComponent::GetEnginesStates()
       //TurboPropEngine->SetCutoff(EngineCommand.CutOff);
       //TurboPropEngine->SetGeneratorPower(EngineCommand.GeneratorPower);
       //TurboPropEngine->SetCondition(EngineCommand.Condition);
+      break;
+    }
+    case JSBSim::FGEngine::etTwinTurboshaft:
+    {
+      std::shared_ptr < JSBSim::FGTwinTurboshaft> TwinEngine = std::static_pointer_cast<JSBSim::FGTwinTurboshaft>(Engine);
+      EngineStates[i].N1 = 0.5 * (TwinEngine->GetN1(0) + TwinEngine->GetN1(1));
+      EngineStates[i].CutOff = TwinEngine->GetCutoff();
+      EngineStates[i].GeneratorPower = TwinEngine->GetGeneratorPower();
+      EngineStates[i].Condition = (TwinEngine->GetCondition(0) != 0) || (TwinEngine->GetCondition(1) != 0);
       break;
     }
     default:
