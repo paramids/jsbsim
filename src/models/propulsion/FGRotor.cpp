@@ -61,6 +61,14 @@ MISC
 
 static inline double sqr(double x) { return x*x; }
 
+// 0 below a, 1 above b, a smooth S-curve in between
+static inline double smoothstep(double a, double b, double x)
+{
+  double t = (x - a) / (b - a);
+  t = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+  return t * t * (3.0 - 2.0 * t);
+}
+
 /*%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 CLASS IMPLEMENTATION
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
@@ -77,6 +85,9 @@ FGRotor::FGRotor(FGFDMExec *exec, Element* rotor_element, int num)
     BladeFlappingMoment(0.0), BladeMassMoment(0.0), PolarMoment(0.0),
     InflowLag(0.0), TipLossB(0.0),
     GroundEffectExp(0.0), GroundEffectShift(0.0), GroundEffectScaleNorm(1.0),
+    VortexRingEnabled(false), VortexStrength(1.0), VortexMuStart(0.04), VortexMuEnd(0.08),
+    VortexBuffetThrust(0.0), VortexBuffetFlap(0.0), VortexBuffetHz(0.6),
+    VortexDescentRatio(0.0), VortexDepth(0.0), VortexInflowScale(1.0),
     LockNumberByRho(0.0), Solidity(0.0),            // derived parameters
     RPM(0.0), Omega(0.0),                           // dynamic values
     beta_orient(0.0),
@@ -343,6 +354,37 @@ double FGRotor::Configure(Element* rotor_element)
   GroundEffectExp = ConfigValue(rotor_element, "groundeffectexp", 0.0);
   GroundEffectShift = ConfigValueConv(rotor_element, "groundeffectshift", 0.0, "FT");
 
+  // Vortex ring state, off unless a <vortexring> element is present:
+  //   <vortexring>
+  //     <strength>       1.0  </strength>       multiplies the mean inflow increase (0 = no mean effect)
+  //     <mu_start>       0.04 </mu_start>       in-plane speed / tip speed where the effect starts to fade out
+  //     <mu_end>         0.08 </mu_end>         ... and where it is gone
+  //     <buffet_thrust>  0.10 </buffet_thrust>  relative thrust fluctuation at full depth
+  //     <buffet_flap>    1.0  </buffet_flap>    flapping fluctuation at full depth [degrees]
+  //     <buffet_hz>      0.6  </buffet_hz>      base frequency of the buffeting
+  //   </vortexring>
+  VortexBuffet[0] = VortexBuffet[1] = VortexBuffet[2] = 0.0;
+  if (Element* vortex_element = rotor_element->FindElement("vortexring")) {
+    VortexRingEnabled = true;
+    if (vortex_element->FindElement("strength"))
+      VortexStrength = vortex_element->FindElementValueAsNumber("strength");
+    if (vortex_element->FindElement("mu_start"))
+      VortexMuStart = vortex_element->FindElementValueAsNumber("mu_start");
+    if (vortex_element->FindElement("mu_end"))
+      VortexMuEnd = vortex_element->FindElementValueAsNumber("mu_end");
+    if (vortex_element->FindElement("buffet_thrust"))
+      VortexBuffetThrust = vortex_element->FindElementValueAsNumber("buffet_thrust");
+    if (vortex_element->FindElement("buffet_flap"))
+      VortexBuffetFlap = vortex_element->FindElementValueAsNumber("buffet_flap") * M_PI / 180.0;
+    if (vortex_element->FindElement("buffet_hz"))
+      VortexBuffetHz = vortex_element->FindElementValueAsNumber("buffet_hz");
+    VortexStrength = Constrain(0.0, VortexStrength, 20.0);
+    VortexMuEnd = (VortexMuEnd > VortexMuStart + 1e-6) ? VortexMuEnd : VortexMuStart + 1e-6;
+    VortexBuffetThrust = Constrain(0.0, VortexBuffetThrust, 0.5);
+    VortexBuffetFlap = Constrain(0.0, VortexBuffetFlap, 0.2);
+    VortexBuffetHz = Constrain(0.05, VortexBuffetHz, 10.0);
+  }
+
   // precalc often used powers
   R[0]=1.0; R[1]=Radius;   R[2]=R[1]*R[1]; R[3]=R[2]*R[1]; R[4]=R[3]*R[1];
   B[0]=1.0; B[1]=TipLossB; B[2]=B[1]*B[1]; B[3]=B[2]*B[1]; B[4]=B[3]*B[1];
@@ -410,6 +452,57 @@ FGColumnVector3 FGRotor::fus_angvel_body2ca( const FGColumnVector3 &pqr)
 
 //%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+// Vortex ring state. In a power-on descent at low forward speed the rotor sinks into its own wake; momentum theory then
+// underestimates the induced velocity, thrust at a given collective falls and the flow is unsteady.
+//
+//  - Descent ratio x = axial descent speed / hover induced velocity, with the hover induced velocity taken from the
+//    aircraft weight (robust while the rotor is unloaded): v_h = sqrt(W / (2 rho A)). Ww is positive when the air
+//    comes up through the disc, i.e. in a descent.
+//  - Mean effect: the empirical induced velocity in descent (Johnson's fit, kappa = 1),
+//      v_i / v_h = 1 + 1.125 x - 1.372 x^2 + 1.718 x^3 - 0.655 x^4      for 0 < x < 2,
+//    compared with momentum theory, v_i / v_h = x/2 + sqrt(x^2/4 + 1). The relative increase (times VortexStrength)
+//    scales the inflow target. Beyond x = 1.8 the fit is tapered away (windmill brake state).
+//  - Forward speed removes the effect: it fades out between mu = VortexMuStart and VortexMuEnd (in-plane speed / tip speed).
+//  - Depth 0..1 (a bump over about 0.15 < x < 1.6, faded with forward speed) drives the buffeting, applied in CalcRotorState.
+
+void FGRotor::calc_vortex_ring(double Uw, double Vw, double Ww)
+{
+  VortexInflowScale = 1.0;
+  VortexDepth = 0.0;
+  VortexDescentRatio = 0.0;
+
+  if (!VortexRingEnabled || Omega < 0.5 * NominalRPM * 2.0 * M_PI / 60.0) return;
+
+  const double area = M_PI * sqr(Radius);
+  const double weight = fdmex->GetMassBalance()->GetWeight();   // lbs
+  const double v_hover = sqrt( (weight > 1.0 ? weight : 1.0) / (2.0 * rho * area) );
+  const double x = Ww / v_hover;
+  VortexDescentRatio = x;
+  if (x <= 0.0 || x >= 2.4) return;
+
+  const double mu_in_plane = sqrt(sqr(Uw) + sqr(Vw)) / (Omega * Radius);
+  const double fade = 1.0 - smoothstep(VortexMuStart, VortexMuEnd, mu_in_plane);
+  if (fade <= 0.0) return;
+
+  const double xe = x < 2.0 ? x : 2.0;
+  const double momentum = 0.5 * x + sqrt(0.25 * x * x + 1.0);
+  const double empirical = 1.0 + xe * (1.125 + xe * (-1.372 + xe * (1.718 - 0.655 * xe)));
+  double increase = empirical / momentum - 1.0;
+  if (increase < 0.0) increase = 0.0;
+  const double taper = 1.0 - smoothstep(1.8, 2.4, x);
+  VortexInflowScale = 1.0 + VortexStrength * increase * fade * taper;
+
+  VortexDepth = smoothstep(0.15, 0.5, x) * (1.0 - smoothstep(1.3, 2.0, x)) * fade;
+
+  // buffeting: sums of sines with incommensurate frequencies, so it is irregular but repeatable
+  const double w = 2.0 * M_PI * VortexBuffetHz * fdmex->GetSimTime();
+  VortexBuffet[0] = 0.6 * sin(w)         + 0.4 * sin(2.3 * w + 1.3);
+  VortexBuffet[1] = 0.6 * sin(1.7 * w + 0.7) + 0.4 * sin(0.53 * w + 2.1);
+  VortexBuffet[2] = 0.6 * sin(1.3 * w + 2.9) + 0.4 * sin(2.9 * w + 0.4);
+}
+
+//%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 // The calculation is a bit tricky because thrust depends on induced velocity,
 // and vice versa.
 //
@@ -436,6 +529,10 @@ void FGRotor::calc_flow_and_thrust( double theta_0, double Uw, double Ww,
 
   c0 = (LiftCurveSlope/2.0)*(ct_l + ct_t0 + ct_t1) * Solidity;
   c0 = c0 / ( 2.0 * sqrt( sqr(mu) + sqr(lambda) ) + 1e-15);
+
+  // Vortex ring state: a larger inflow target (VortexInflowScale is 1.0 outside the region). It scales the target c0, not
+  // the recursion below, because flow_scale is applied to nu on every step and would compound.
+  c0 *= VortexInflowScale;
 
   // replacement for /SH79/ eqn(26).
   // ref: dnu/dt = 1/tau ( Ct / (2*sqrt(mu^2+lambda^2))  -  nu )
@@ -672,11 +769,20 @@ void FGRotor::CalcRotorState(void)
 
   avFus_ca = fus_angvel_body2ca(in.AeroPQR);
 
+  calc_vortex_ring(vHub_ca(eU), vHub_ca(eV), vHub_ca(eW));
+
   calc_flow_and_thrust(theta_col, vHub_ca(eU), vHub_ca(eW), ge_factor);
+
+  // buffeting in the vortex ring state: fluctuating thrust ...
+  Thrust *= 1.0 + VortexBuffetThrust * VortexDepth * VortexBuffet[0];
 
   calc_coning_angle(theta_col);
 
   calc_flapping_angles(theta_col, avFus_ca);
+
+  // ... and fluctuating flapping, which rocks the aircraft in pitch and roll through the hub moment and the thrust tilt
+  a_1 += VortexBuffetFlap * VortexDepth * VortexBuffet[1];
+  b_1 += VortexBuffetFlap * VortexDepth * VortexBuffet[2];
 
   calc_drag_and_side_forces(theta_col);
 
@@ -761,6 +867,16 @@ bool FGRotor::bindmodel(FGPropertyManager* PropertyManager)
   property_name = base_property_name + "/phi-downwash-rad";
   PropertyManager->Tie( property_name.c_str(), this, &FGRotor::GetPhiDW );
 
+  property_name = base_property_name + "/vortex-ring-depth";
+  PropertyManager->Tie( property_name.c_str(), this, &FGRotor::GetVortexDepth );
+  property_name = base_property_name + "/vortex-ring-descent-ratio";
+  PropertyManager->Tie( property_name.c_str(), this, &FGRotor::GetVortexDescentRatio );
+  property_name = base_property_name + "/vortex-ring-inflow-scale";
+  PropertyManager->Tie( property_name.c_str(), this, &FGRotor::GetVortexInflowScale );
+  property_name = base_property_name + "/vortex-ring-strength";
+  PropertyManager->Tie( property_name.c_str(), this, &FGRotor::GetVortexStrength, &FGRotor::SetVortexStrength );
+  property_name = base_property_name + "/vortex-ring-buffet-thrust";
+  PropertyManager->Tie( property_name.c_str(), this, &FGRotor::GetVortexBuffetThrust, &FGRotor::SetVortexBuffetThrust );
   property_name = base_property_name + "/groundeffect-scale-norm";
   PropertyManager->Tie( property_name.c_str(), this, &FGRotor::GetGroundEffectScaleNorm,
                                                      &FGRotor::SetGroundEffectScaleNorm );

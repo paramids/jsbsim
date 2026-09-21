@@ -296,6 +296,19 @@ public:
   /// Sets the ground effect scaling factor.
   void   SetGroundEffectScaleNorm(double g) { GroundEffectScaleNorm = g; }
 
+  /// Vortex ring state: how deep the rotor is in the vortex ring region (0 = outside, 1 = full depth).
+  double GetVortexDepth(void) const { return VortexDepth; }
+  /// Vortex ring state: axial descent speed divided by the hover induced velocity (positive when descending).
+  double GetVortexDescentRatio(void) const { return VortexDescentRatio; }
+  /// Vortex ring state: factor applied to the inflow target (1 = none).
+  double GetVortexInflowScale(void) const { return VortexInflowScale; }
+  /// Vortex ring state: strength multiplier of the mean inflow increase (0 switches the mean effect off).
+  double GetVortexStrength(void) const { return VortexStrength; }
+  void   SetVortexStrength(double s) { VortexStrength = s < 0.0 ? 0.0 : s; }
+  /// Vortex ring state: relative thrust fluctuation at full depth.
+  double GetVortexBuffetThrust(void) const { return VortexBuffetThrust; }
+  void   SetVortexBuffetThrust(double s) { VortexBuffetThrust = s < 0.0 ? 0.0 : s; }
+
   /// Retrieves the collective control input in radians.
   double GetCollectiveCtrl(void) const { return CollectiveCtrl; }
   /// Retrieves the lateral control input in radians.
@@ -328,6 +341,7 @@ private:
   void CalcRotorState(void);
 
   // rotor dynamics
+  void calc_vortex_ring(double Uw, double Vw, double Ww);
   void calc_flow_and_thrust(double theta_0, double Uw, double Ww, double flow_scale = 1.0);
   void calc_coning_angle(double theta_0);
   void calc_flapping_angles(double theta_0, const FGColumnVector3 &pqr_fus_w);
@@ -380,6 +394,19 @@ private:
   double GroundEffectExp;
   double GroundEffectShift;
   double GroundEffectScaleNorm;
+
+  // vortex ring state (optional, configured by <vortexring>; see calc_vortex_ring())
+  bool   VortexRingEnabled;
+  double VortexStrength;      // multiplies the inflow increase of the empirical curve over momentum theory
+  double VortexMuStart;       // in-plane speed ratio where the effect starts to fade out
+  double VortexMuEnd;         // in-plane speed ratio where it is gone
+  double VortexBuffetThrust;  // relative thrust fluctuation at full depth
+  double VortexBuffetFlap;    // flapping angle fluctuation at full depth [rad]
+  double VortexBuffetHz;      // base frequency of the buffeting [Hz]
+  double VortexDescentRatio;  // axial descent speed / hover induced velocity
+  double VortexDepth;         // 0..1, how deep in the vortex ring region
+  double VortexInflowScale;   // factor on the inflow target, 1.0 = none
+  double VortexBuffet[3];     // buffeting signals of this step: thrust, longitudinal flap, lateral flap
 
   // derived parameters
   double LockNumberByRho;
