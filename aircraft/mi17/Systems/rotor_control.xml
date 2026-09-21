@@ -1,0 +1,591 @@
+<system name="rotor control">
+
+  <!-- =========================================================================
+  =================
+    Documentation
+  =================
+
+  - Rationale -
+
+     Besides the rotor definition which is handled by the C++ code - obviously
+     the most important part of a helicopter model - a good control setup is
+     actually more important than the remaining aerodynamics (assuming the
+     given/guessed coefficients are at least within a 50% window).
+
+     The basic relation is straight forward:
+                rotor-ctrl-x = pilot-input-x * gain + offset.
+
+  - Collective Mixing -
+
+     Unless real-world data is available, it's reasonable to adjust gain and
+     offset for minimal input travel as a first step. This simple approach has
+     a drawback. When one input is changed, the other three need to be
+     readjusted. This is most notably when the collective input is changed, and
+     to compensate for this, some part of the collective input is mixed into
+     the lateral and yaw channels.
+
+     There are two principal goals of collective-mixing:
+
+       a) compensation in level flight - lateral, and anti-torque controls
+          follow accordingly, minimizing input requirements.
+
+       b) compensation for the torque change - lateral, and anti-torque changes
+          should give proper counter moments. 
+
+     Both tasks can't be fullfilled with simple contol mixing, the compromise in
+     this system is biased towards dynamic compensation of the collective input.
+
+  - Input Mapping -
+
+     The system also provides configurable support for simulator inputs.
+     Collective input can be turned more sensitve for the intermediate control
+     range (fcs/adj/collective-profile), and the other inputs use a common
+     'power function' approach for center sensitivity (fcs/adj/center-sensitivity).
+     These features might be also present as part of an advanced joystick
+     configuration, so it's your choice which one to use.
+
+  - Notes -
+
+     All adjustable control parameters can be found under 'JSBSIMNODE/fcs/adj/'.
+     If the model is run with flightgear, it's relatively easy to optimize the
+     parameters via the property tree browser.
+
+     An enabled AFCS/SAS should be able to ease control a lot, and AFAIK all
+     larger and all modern helicopters rely on such systems.
+
+                -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
+
+  ===============================
+    System Interface/Properties
+  ===============================
+
+   Inputs by the pilot:
+      fcs/collective-cmd-norm (often called 'pitch' in germany - a brilliant convention...)
+      fcs/elevator-cmd-norm (longitudinal)
+      fcs/aileron-cmd-norm (lateral)
+      fcs/rudder-cmd-norm (anti-torque, tail-collective)
+
+   Trim inputs/settings:
+      fcs/collective-trim-cmd-norm
+      fcs/pitch-trim-cmd-norm
+      fcs/roll-trim-cmd-norm
+      fcs/yaw-trim-cmd-norm
+
+   Inputs from AFCS/SAS system:
+      ap/collective-cmd
+      ap/elevator-cmd
+      ap/aileron-cmd
+      ap/rudder-cmd
+
+   Adjustable properties:
+      fcs/adj/collective-gain
+      fcs/adj/collective-bias
+
+      fcs/adj/longitudinal-gain
+      fcs/adj/longitudinal-bias
+
+      fcs/adj/lateral-gain
+      fcs/adj/lateral-bias
+      fcs/adj/lateral-col-mix-infl
+      fcs/adj/lateral-col-mix-gain
+      fcs/adj/lateral-col-mix-bias
+
+      fcs/adj/pedal-gain
+      fcs/adj/pedal-bias
+      fcs/adj/pedal-col-mix-infl
+      fcs/adj/pedal-torque-mix-gain
+      fcs/adj/pedal-col-mix-bias
+
+   Simulator 'mapping' properties:
+      fcs/adj/collective-profile
+      fcs/adj/center-sensitivity
+
+   Outputs for a decent helicopter (ie: big main rotor, smaller tail rotor for
+   anti-torque):
+      propulsion/engine[0]/collective-ctrl-rad
+      propulsion/engine[0]/longitudinal-ctrl-rad
+      propulsion/engine[0]/lateral-ctrl-rad
+      propulsion/engine[2]/antitorque-ctrl-rad
+
+       ========================================================================= -->
+
+  <!-- ==================================
+         Declare and initialise control
+       ================================== -->
+
+  <property value="0.0"> fcs/collective-cmd-norm </property>
+  <property value="0.0"> fcs/collective-trim-cmd-norm </property>
+
+  <!-- ==================================
+         Setup for interactive use
+       ================================== -->
+
+  <!-- 
+      Collective input, provide more 'bits' for the intermediate range, 0 for
+      unmodified input, 1 for more sensitivity.
+  -->
+  <property value="1.0"> fcs/adj/collective-profile </property>
+
+  <!--
+      Higher center resolution for the other three controls, set to 1 for
+      unmodified input, treat 2 as an upper limit.
+  -->
+  <property value="1.5"> fcs/adj/center-sensitivity </property>
+
+  <!-- - - - - - - - - - - - - - - - - -
+          math helper
+       - - - - - - - - - - - - - - - - - -->
+
+  <channel name="collective control profile">
+    <fcs_function name="fcs/misc/collective-cmd-norm-polymod">
+        <description>
+          A s-shaped profile, described with a 5th order polynomial.
+          f(x) = x**5 + x | [-1:1], mapped to [0:1]x[0:1], resulting in
+          f(x) = 8*x**5 - 20*x**4 + 20*x**3 - 10*x**2 + 3*x.
+        </description>
+      <function>
+        <table>
+          <independentVar lookup="row"> fcs/collective-cmd-norm </independentVar>
+          <tableData>
+            0.000000 0.000000
+            0.050000 0.127377
+            0.100000 0.218080
+            0.150000 0.282983
+            0.200000 0.330560
+            0.250000 0.367188
+            0.300000 0.397440
+            0.350000 0.424393
+            0.400000 0.449920
+            0.450000 0.474997
+            0.500000 0.500000
+            0.550000 0.525002
+            0.600000 0.550080
+            0.650000 0.575608
+            0.700000 0.602560
+            0.750000 0.632813
+            0.800000 0.669440
+            0.850000 0.717018
+            0.900000 0.781920
+            0.950000 0.872623
+            1.000000 1.000000
+          </tableData>
+        </table>
+      </function>
+    </fcs_function>
+  </channel>
+
+  <!-- ==================================
+         Rotor Control System
+       ================================== -->
+
+  <!-- - - - - - - - - - - - - - - - - -
+          collective
+       - - - - - - - - - - - - - - - - - -->
+  <property value='0.25'> fcs/adj/collective-gain </property>
+  <property value='0.15'> fcs/adj/collective-bias </property>
+
+  <channel name="collective">
+
+    <fcs_function name="fcs/collective-cmd-norm-variant">
+      <function>
+        <sum>
+          <!-- regular collective input if 'collective-profile' is 0 -->
+          <product>
+            <property> fcs/collective-cmd-norm </property>
+            <difference>
+              <value> 1.0 </value>
+              <property> fcs/adj/collective-profile </property>
+            </difference>
+          </product>
+          <!-- mapped input if 'collective-profile' is 1 -->
+          <product>
+            <property> fcs/adj/collective-profile </property>
+            <property> fcs/misc/collective-cmd-norm-polymod </property>
+          </product>
+        </sum>
+      </function>
+    </fcs_function>
+    <summer name="fcs/collective-cmd-trim-sum">
+      <input> fcs/collective-cmd-norm-variant </input>
+      <input> fcs/collective-trim-cmd-norm </input>
+      <clipto>
+        <min> -1.0 </min>
+        <max>  1.0 </max>
+      </clipto>
+    </summer>
+    <pure_gain name="fcs/collective-gain">
+      <input>  fcs/collective-cmd-trim-sum </input>
+      <gain>   fcs/adj/collective-gain </gain>
+    </pure_gain>
+    <summer name="fcs/collective-ctrl-rad">
+      <input> fcs/collective-gain </input>
+      <input> ap/collective-cmd </input>
+      <input> fcs/adj/collective-bias </input>
+      <output> fcs/collective-ctrl-rad </output>
+    </summer>
+    <lag_filter name="fcs/collective-ctrl-rad-lag">
+      <input> fcs/collective-ctrl-rad </input>
+      <!-- c1 ranges: 5.0 - 20.0 -->
+      <c1>   12.0 </c1>
+      <clipto>
+        <min> 0.0 </min>
+        <max> 0.8 </max>
+      </clipto>
+      <output> propulsion/engine[0]/collective-ctrl-rad </output>
+    </lag_filter>
+
+  </channel>
+
+  <!-- - - - - - - - - - - - - - - - - -
+          longitudinal
+       - - - - - - - - - - - - - - - - - -->
+  <property value='0.15'> fcs/adj/longitudinal-gain </property>
+  <property value='0.025'> fcs/adj/longitudinal-bias </property>
+
+  <channel name="longitudinal">
+
+    <fcs_function name="fcs/elevator-cmd-norm-exmod">
+      <description>
+        Provide higher sensitivity when near center.
+        new_input = sgn(input) * abs(input)**sensitivity,
+        with sensitivity ranging between 1..2 .
+      </description>
+      <function>
+        <product>
+          <sign> <property> fcs/elevator-cmd-norm </property> </sign>
+          <pow>
+            <abs> <property> fcs/elevator-cmd-norm </property> </abs>
+            <property> fcs/adj/center-sensitivity </property>
+          </pow>
+        </product>
+      </function>
+    </fcs_function>
+    <summer name="fcs/longitudinal-cmd-trim-sum">
+      <input> fcs/elevator-cmd-norm-exmod </input>
+      <input> fcs/pitch-trim-cmd-norm </input>
+      <clipto>
+        <min> -1.0 </min>
+        <max>  1.0 </max>
+      </clipto>
+    </summer>
+    <pure_gain name="fcs/longitudinal-gain">
+      <input>  fcs/longitudinal-cmd-trim-sum </input>
+      <gain>   fcs/adj/longitudinal-gain </gain>
+    </pure_gain>
+    <summer name="fcs/longitudinal-ctrl-rad">
+      <input> fcs/longitudinal-gain </input>
+      <input> fcs/adj/longitudinal-bias </input>
+      <input> ap/elevator-cmd </input>
+      <clipto>
+        <min> -0.8 </min>
+        <max>  0.8 </max>
+      </clipto>
+    </summer>
+    <lag_filter name="fcs/longitudinal-ctrl-rad-lag">
+      <input> fcs/longitudinal-ctrl-rad </input>
+      <!-- c1 ranges: 10.0 - 50.0 -->
+      <c1>   25.0 </c1>
+      <output> propulsion/engine[0]/longitudinal-ctrl-rad </output>
+    </lag_filter>
+
+  </channel>
+
+  <!-- - - - - - - - - - - - - - - - - -
+          lateral
+       - - - - - - - - - - - - - - - - - -->
+  <property value='0.06'> fcs/adj/lateral-gain </property>
+  <property value='0.00'> fcs/adj/lateral-bias </property>
+
+  <property value='1.00'> fcs/adj/lateral-col-mix-infl </property>
+  <property value='-0.12'> fcs/adj/lateral-col-mix-gain </property>
+  <property value='0.015'> fcs/adj/lateral-col-mix-bias </property>
+
+  <channel name="lateral">
+
+    <fcs_function name="fcs/aileron-cmd-norm-exmod">
+      <description> See longitudinal channel. </description>
+      <function>
+        <product>
+          <sign> <property> fcs/aileron-cmd-norm </property> </sign>
+          <pow>
+            <abs> <property> fcs/aileron-cmd-norm </property> </abs>
+            <property> fcs/adj/center-sensitivity </property>
+          </pow>
+        </product>
+      </function>
+    </fcs_function>
+    <summer name="fcs/lateral-cmd-trim-sum">
+      <input> fcs/aileron-cmd-norm-exmod </input>
+      <input> fcs/roll-trim-cmd-norm </input>
+      <clipto>
+        <min> -1.0 </min>
+        <max>  1.0 </max>
+      </clipto>
+    </summer>
+    <pure_gain name="fcs/lateral-gain">
+      <input>  fcs/lateral-cmd-trim-sum </input>
+      <gain>   fcs/adj/lateral-gain </gain>
+    </pure_gain>
+    <summer name="fcs/lateral-sum">
+      <input> fcs/lateral-gain </input>
+      <input> ap/aileron-cmd </input>
+      <input> fcs/adj/lateral-bias </input>
+      <clipto>
+        <min> -0.8 </min>
+        <max>  0.8 </max>
+      </clipto>
+    </summer>
+
+    <!-- collective compensation -->
+    <fcs_function name="fcs/lateral-ctrl-rad">
+      <function>
+        <sum>
+          <property> fcs/lateral-sum </property>
+          <product>
+            <property> fcs/adj/lateral-col-mix-infl </property>
+            <sum>
+              <product>
+                <property> fcs/collective-ctrl-rad </property>
+                <property> fcs/adj/lateral-col-mix-gain </property>
+              </product>
+              <property> fcs/adj/lateral-col-mix-bias </property>
+            </sum>
+          </product>
+        </sum>
+      </function>
+    </fcs_function>
+
+    <lag_filter name="fcs/lateral-ctrl-rad-lag">
+      <input> fcs/lateral-ctrl-rad </input>
+      <!-- c1 ranges: 10.0 - 50.0 -->
+      <c1>   25.0 </c1>
+      <output> propulsion/engine[0]/lateral-ctrl-rad </output>
+    </lag_filter>
+
+  </channel>
+
+  <!-- - - - - - - - - - - - - - - - - -
+          pedal/antitorque
+       - - - - - - - - - - - - - - - - - -->
+  <property value='0.20'> fcs/adj/pedal-gain </property>
+  <property value='0.00'> fcs/adj/pedal-bias </property>
+
+  <property value='1.00'> fcs/adj/pedal-col-mix-infl </property>
+  <!-- Antitorque gain history (collective-position feedforward, now
+       replaced by a torque feedforward, see fcs/adj/pedal-torque-mix-
+       gain below): 0.70 (matched to the old single mocked engine's
+       ~5000 ft-lb reference torque) -> 3.92 (~5.6x, reasoning from a
+       ~28000 ft-lb figure that turned out to be an artifact of the RPM
+       governor not being wired to throttle) -> reverted to 0.70
+       (reasoning from a ~5000-5800 ft-lb ground-idle torque figure
+       that was itself wrong, since engine power was still an
+       underpowered 1000 HP/side placeholder at the time, so the
+       aircraft could not lift off at all) -> 7.5 (scaled from real
+       hover torque, ~54000-56000 ft-lb combined, against the original
+       5000 ft-lb reference). Each of those was a single gain on
+       collective position, and none of them could be right across both
+       idle and hover once the governor started actively regulating
+       power: 7.5 alone gave ground-idle collective (bias-only, ~0.15
+       rad) a mix term of 0.15*7.5-0.12 = 1.005 rad, clamped to the
+       tail rotor's own 0.45 rad ceiling, commanding max tail rotor
+       pitch while just sitting on the gear with next to no real torque
+       to counter, and crashing on the initial ground settle. -->
+  <!-- Switched from a collective-POSITION feedforward to a TORQUE
+       feedforward: no single gain on collective can be right across
+       both idle and hover once the RPM governor is actively regulating
+       power, because torque doesn't scale simply with commanded
+       collective any more (it depends on however much throttle the
+       governor happens to be running at for the current RPM error).
+       Concretely: at gain=7.5 (sized for real hover torque, see below)
+       even ground-idle collective (bias-only, ~0.15 rad) already gave
+       mix_term = 0.15*7.5-0.12 = 1.005 rad, clamped to the tail rotor's
+       own 0.45 rad ceiling, commanding max tail rotor pitch while the
+       aircraft was just sitting on its gear with next to no real
+       torque to counter, and crashing on the initial ground settle.
+       Reading actual combined main rotor torque instead scales
+       correctly in any regime automatically: near-zero at idle,
+       proportionally large at hover, without needing to pick one gain
+       that's only right for one operating point.
+       gain sized from real hover data (scripts/test_mi17_hover.xml):
+       propulsion/engine[0]/torque-lbsft settles around 27000-28000
+       ft-lb at hover (this IS the combined main rotor reaction torque
+       already; FGRotor's own aerodynamic torque is a single value
+       for the one shared rotor, tied only at the gearbox's lowest
+       engine index per FGGearbox's convention, not duplicated per
+       engine: propulsion/engine[1]/torque-lbsft does not exist).
+
+       Solved so 27500 ft-lb maps to exactly the tail rotor's 0.45 rad
+       pitch ceiling (full available authority at the real worst-case
+       load): gain = (0.45 - bias) / 27500 ~= 0.0000207 rad per ft-lb.
+
+       This leaves antitorque-ctrl-rad pinned at exactly 0.450000
+       constantly during hover, with ap/sas-yaw-cmd's own rate-feedback
+       correction (afcs.xml, summed in via fcs/pedal-sum above) unable
+       to add anything on top since the output is already saturated.
+       Tried two ways to give the SAS term real headroom instead of
+       immediately re-saturating: raising the clamp to 0.55 (see the
+       clamp's own comment below: made both residual yaw and roll
+       worse), and reducing this gain to ~70% of the ceiling at typical
+       hover torque (0.0000158, leaving ~0.135 rad of nominal headroom).
+       Neither changed the outcome: with the reduced gain, antitorque-
+       ctrl-rad was STILL pinned at exactly 0.450000 and the residual
+       yaw rate was unchanged (-6.6 to -6.8 rad/sec, same as at full
+       gain). This proves the feedforward/feedback split doesn't matter
+       here: ap/sas-yaw-cmd alone, driven by the already-large steady r,
+       is enough on its own to push the sum straight back up to the
+       clamp regardless of how much of the budget the feedforward
+       claims. The constraint is the tail rotor's genuine maximum
+       thrust output at 0.45 rad pitch (confirmed adequate but not
+       generous against the ~853 lb needed, see the clamp's own comment
+       below), not a control-loop tuning problem; reverted to the
+       cleanly-justified 0.0000207 since the headroom rationale for
+       0.0000158 is now disproven.
+
+       Since then, got real Mi-17 manual figures for the tail rotor's
+       actual pitch range: 7 deg 20' (0.128 rad) to 20 deg 30' (0.358
+       rad) at the pedal extremes, tighter at the top end than the
+       0.45 rad this was sized against (see the clamp's own comment
+       below for the corrected clamp values). Resolved so the true
+       20.5 deg / 0.358 rad ceiling maps to 27500 ft-lb instead:
+       gain = (0.358 - bias) / 27500 ~= 0.0000174 rad per ft-lb. -->
+  <property value='0.0000174'> fcs/adj/pedal-torque-mix-gain </property>
+  <property value='-0.12'> fcs/adj/pedal-col-mix-bias </property>
+
+  <channel name="pedal">
+
+    <fcs_function name="fcs/rudder-cmd-norm-exmod">
+      <description> See longitudinal channel. </description>
+      <function>
+        <product>
+          <sign> <property> fcs/rudder-cmd-norm </property> </sign>
+          <pow>
+            <abs> <property> fcs/rudder-cmd-norm </property> </abs>
+            <property> fcs/adj/center-sensitivity </property>
+          </pow>
+        </product>
+      </function>
+    </fcs_function>
+    <summer name="fcs/pedal-cmd-trim-sum">
+      <input> fcs/rudder-cmd-norm-exmod </input>
+      <input> fcs/yaw-trim-cmd-norm </input>
+      <clipto>
+        <min> -1.0 </min>
+        <max>  1.0 </max>
+      </clipto>
+    </summer>
+    <pure_gain name="fcs/pedal-gain">
+      <input>  fcs/pedal-cmd-trim-sum </input>
+      <gain>   fcs/adj/pedal-gain </gain>
+    </pure_gain>
+    <summer name="fcs/pedal-sum">
+      <input> fcs/pedal-gain </input>
+      <input> fcs/adj/pedal-bias </input>
+      <input> ap/rudder-cmd </input>
+    </summer>
+
+    <!-- torque compensation: main rotor reaction torque, not
+         collective position; see fcs/adj/pedal-torque-mix-gain's
+         comment above for why. propulsion/engine[0]/torque-lbsft is
+         already the full rotor torque (a single physical value for the
+         one shared rotor, not per-engine); no summing needed. -->
+    <fcs_function name="fcs/pedal-ctrl-rad">
+      <function>
+        <sum>
+          <property> fcs/pedal-sum </property>
+          <product>
+            <property> fcs/adj/pedal-col-mix-infl </property>
+            <sum>
+              <product>
+                <property> propulsion/engine[0]/torque-lbsft </property>
+                <property> fcs/adj/pedal-torque-mix-gain </property>
+              </product>
+              <property> fcs/adj/pedal-col-mix-bias </property>
+            </sum>
+          </product>
+        </sum>
+      </function>
+    </fcs_function>
+
+    <lag_filter name="fcs/pedal-ctrl-rad-lag">
+      <input> fcs/pedal-ctrl-rad </input>
+      <!-- c1 ranges: 10.0 - 50.0 -->
+      <c1>   25.0 </c1>
+      <!-- Unlike fcs/collective-ctrl-rad-lag below, this chain had no
+           output clamp at all. With the mix gain raised (see the
+           antitorque gain history comment above) plus the yaw-rate SAS term
+           summed in via ap/rudder-cmd, an unclamped pedal-ctrl-rad was
+           observed commanding ~0.9-1.0 rad (52-59 deg) of tail rotor
+           blade pitch, more than double any physically real tail
+           rotor collective range, and self-reinforcing (more commanded
+           pitch drives more tail rotor shaft torque/reaction, which
+           drives more yaw rate, which drives more SAS correction).
+           Clamp to a plausible physical tail rotor pitch range, same
+           pattern as the main rotor's collective clamp.
+
+           Investigated (not just tuned) tail rotor authority before
+           touching this: propulsion/engine[2]/rotor-rpm tracks its
+           real 1200 RPM nominal correctly (confirms the gearing is
+           right), and propulsion/engine[2]/thrust-lbs at this clamp
+           fluctuates 590-1178 lbs against the ~853 lbs (torque/arm =
+           ~27000 ft-lb / 31.67 ft, tail rotor at x=580in vs CG
+           x=200in) needed to fully cancel real hover torque; i.e.
+           genuinely close, not fundamentally undersized. Tried raising
+           max to 0.55 for more SAS headroom; that made BOTH the
+           residual yaw rate (-6.7 -> -7.7 rad/sec) and roll (~0.2-0.3
+           -> ~0.4 rad) worse, not better. Also tried flipping the tail
+           rotor's own <sense> in mi17.xml (both rotors explicitly set
+           it to 1/CCW; hypothesis was that same-signed reaction torque
+           was compounding the disturbance): that made things far
+           worse still, r-rad_sec diverging from t=0 instead of the
+           steady ~-6.7 seen at sense=1, disproving that hypothesis;
+           sense=1 is providing real damping, not adding disturbance.
+           Reverted both. Left at 0.45; likely explanation for the
+           roll increase at 0.55 is the tail rotor's own ~60in vertical
+           offset from the CG (mi17.xml: tail rotor z=140in vs CG
+           z=80in) turning more commanded side thrust into more rolling
+           moment as a side effect, not just more yaw authority. See
+           fcs/adj/pedal-torque-mix-gain's comment above for the
+           current approach (give the SAS term headroom via a smaller
+           feedforward instead of a larger clamp).
+
+           Real Mi-17 manual figures for tail rotor pitch: 7 deg 20'
+           +-45' at the "left pedal forward" extreme, 20 deg 30' +-20'
+           at "right pedal forward". Narrower than the -0.26/0.45 rad
+           (-14.9/25.8 deg) placeholder range this was clamped to,
+           especially at the top end (20.5 deg real vs 25.8 deg
+           placeholder). Also got a real blade chord (270mm = 0.886 ft,
+           see mi17_tail_rotor.xml), ~11% more than the 0.8 ft
+           placeholder; the manual's own stated rotor solidity (0.135)
+           cross-checks well against that chord (computes to 0.132).
+
+           Naive linear scaling (more chord, less pitch) suggested the
+           real figures together would give slightly LESS max thrust
+           at full deflection than the placeholder combination, not
+           more. Empirically that was wrong: with both real figures in
+           place (and fcs/adj/pedal-torque-mix-gain re-solved for the
+           new 0.358 rad ceiling, see above), the residual hover yaw
+           rate dropped from a steady ~-6.7/-6.8 rad/sec to a steady
+           ~-5.2/-5.3 rad/sec, a real ~22% improvement, and tail rotor
+           thrust at the clamp (propulsion/engine[2]/thrust-lbs) now
+           regularly exceeds the ~853 lb needed rather than fluctuating
+           around it. FGRotor's actual thrust calculation isn't linear
+           in chord x pitch the way the naive estimate assumed; the
+           real chord's added blade area evidently matters more than
+           the reduced pitch ceiling costs. Still saturated at the
+           clamp continuously, so still not fully cancelled; whether
+           further real aerodynamic data (actual NACA-230M lift-curve-
+           slope, rather than the generic 6.0/rad placeholder still
+           used) would close the rest of the gap, or whether this
+           model's main rotor torque estimate is itself somewhat high
+           relative to reality, is unresolved. -->
+      <clipto>
+        <min> -0.128 </min>
+        <max>  0.358 </max>
+      </clipto>
+      <!-- mind: tail rotor is on engine 1 -->
+      <output> propulsion/engine[2]/antitorque-ctrl-rad </output>
+    </lag_filter>
+
+  </channel>
+
+</system>

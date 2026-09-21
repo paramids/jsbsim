@@ -1,0 +1,446 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="http://jsbsim.sf.net/JSBSimScript.xsl"?>
+<runscript
+       name="Mi-17 15-minute hover"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="http://jsbsim.sf.net/JSBSimScript.xsd">
+
+  <description>
+    Rewritten from scratch for the corrected main rotor (real Mi-17
+    diameter/blade-count/chord, aircraft/mi17/Engines/mi17_main_
+    rotor.xml). The previous version of this script (tuned for the
+    old, undersized 52 ft/3-blade rotor placeholder) raised collective
+    from 0.0 to 0.90 in a single instantaneous step at t=15s; against
+    the corrected rotor's much higher thrust sensitivity (thrust scales
+    roughly with numblades x chord x radius^3 in FGRotor's model) it
+    did climb out and pass the altitude-hold handoff, but then
+    diverged and crashed around t=34.5s during free flight, with no
+    error message -- see this branch's commit history for the full
+    investigation. Two concrete, data-backed changes made here instead
+    of just re-tuning constants:
+
+    1. Ground settle time extended from a guessed 15s to a measured
+       120s: scripts/test_mi17_ground_run_idle.xml (governor-driven,
+       no forced throttle) showed shaft-rpm only reaching ~187 RPM at
+       30s and not actually converging to the 192 RPM target until
+       ~90-120s. Raising collective while the governor is still
+       fighting a large RPM error compounds two transients instead of
+       letting one settle before starting the next.
+
+    2. Collective is raised via a slow linear FG_RAMP (45s) instead of
+       an instantaneous step, on the general principle that a real
+       pilot does not slam the collective and a gradual input gives
+       the rotor's inflow dynamics (already known borderline
+       underdamped; see mi17_main_rotor.xml's inflowlag comment) more
+       time to track rather than being hit with a step input. This is
+       a reasonable, physically-motivated change, not a proven fix --
+       the previous crash happened well after the (instantaneous) step
+       was complete and liftoff had already occurred, during ordinary
+       free flight, so a slower ramp may not address the actual root
+       cause. Treat this run's outcome as new diagnostic data, not a
+       validated solution.
+
+    UPDATE: the run described above (settle/bias-ramp/collective-ramp
+    fixes) got much further -- no more violent roll divergence, roll
+    and pitch both stayed under ~7 degrees -- but crashed at t=303s
+    via a different mechanism: the "engage altitude hold" handoff was
+    gated on sim-time-sec ge 185.0 (the collective-climb ramp's own
+    completion time) AND h-agl-ft ge 15.0, but with the corrected
+    mass/CG/inertia the aircraft climbs hard enough to reach 1197 ft
+    AGL at -58.4 fps well before t=185, so altitude hold engaged
+    fighting a ~1167 ft error instead of the intended ~15 ft, causing
+    a large porpoise (1197->154->509 ft) and an eventual bad touchdown.
+    Fixed by changing the time floor to 140.0 (when the climb ramp
+    actually starts) on both the handoff event and the persistent
+    hold-altitude-mode event, so h-agl-ft ge 15 is the condition that
+    actually decides the handoff, matching the original intent.
+
+    Collective-bias is zeroed for the entire ground-settle window (the
+    fix validated in this branch's history: the corrected rotor
+    produces ~19000-20000 lbs from the default 0.15 rad bias ALONE
+    during the RPM-overshoot transient at engine start), and is itself
+    ramped back to 0.15 (20s, t=120-140s) rather than restored as a
+    step once the settle window ends -- an earlier cut of this rewrite
+    ramped collective-cmd-norm but still restored collective-bias as an
+    instantaneous step, reproducing the same abrupt-0.15-rad-jump
+    mechanism at t=120s instead of engine start and triggering a
+    catastrophic blowup (KCAS ~306, all four gear units cycling WOW
+    within 7.5ms) within 6 seconds. Checkpoints are frequent (10-20s)
+    through the settle/ramp/liftoff phases specifically so that if this
+    run also diverges, the trace shows where and how, rather than just
+    a silent stop like the previous version's.
+
+    UPDATE (closed-loop climb-out): the open-loop climb (ramp collective
+    to 0.75, hand off to altitude hold only after the fact at 0.68) that
+    replaced the description above is gone. It produced a large overshoot
+    (climbing to 1000+ ft against a 30 ft target) because 0.75/0.68 were
+    unvalidated guesses, both far above true hover trim, and altitude
+    hold only got a chance to react after most of the excess energy was
+    already built up. True trim was back-computed from a validated near-
+    zero-v-down equilibrium state using rotor_control.xml's collective
+    chain (fcs/collective-ctrl-rad = polymod(cmd_norm)*collective-gain +
+    ap/collective-cmd + collective-bias): fcs/collective-cmd-norm ~ 0.092
+    holds level with zero autopilot correction. The climb-out now ramps
+    collective directly to that trim value (10s) and engages altitude
+    hold (ap/altitude-hold-on=1.0) at the same instant, t=140 (once the
+    bias ramp is done), instead of first driving a large open-loop
+    excursion and correcting it afterward -- ap/collective-cmd does the
+    entire climb from a small, well-behaved error, closing the loop from
+    liftoff rather than only after it. This also required fixing a real
+    sign bug in afcs.xml's rate/damping term (ap/altitude-rate-gain was
+    positive, which reinforced whatever vertical rate already existed
+    instead of opposing it -- see that file's comment) and raising both
+    P and rate gains 50x once the sign was corrected, bracket-tested
+    1x-320x with no oscillation observed at any step. Validated first in
+    a throwaway diagnostic script before being applied here; see this
+    branch's commit history.
+  </description>
+
+  <use aircraft="mi17" initialize="reset00"/>
+
+  <!-- CSV trace of the full run, 1 Hz: added to see whether the
+       altitude-integral term (afcs.xml) actually converges to the
+       ~30 ft AGL target, or overshoots/oscillates, over a longer
+       window than the checkpoint events below cover. Script-scoped
+       (JSBSim scripts support their own <output>, loaded via
+       FGScript::LoadScript() -> FDMExec->GetOutput()->Load()), not
+       added to aircraft/mi17/mi17.xml, so it only applies to this
+       run, not every script that uses this aircraft. -->
+  <output name="mi17_hover_track.csv" type="CSV" rate="1">
+    <property> position/h-agl-ft </property>
+    <property> velocities/v-down-fps </property>
+    <property> attitude/roll-rad </property>
+    <property> attitude/pitch-rad </property>
+    <property> fcs/collective-cmd-norm </property>
+    <property> ap/altitude-hold-on </property>
+    <property> ap/altitude-integral-cmd </property>
+  </output>
+
+  <run start="0.0" end="3000.0" dt="0.0075">
+
+    <event name="start" persistent="false">
+      <!-- Real, governor-moderated start via FGTurboshaft's starter-cmd/
+           cutoff-cmd, not propulsion/set-running; see scripts/test_mi17_
+           ground_run_idle.xml's identical event comment for the full
+           derivation (the old mechanism's ~329 RPM one-frame overshoot,
+           and why this needs ge 0.1 rather than ge 0.0; JSBSim's own
+           initial dt=0 trim pass leaves FGTurboshaft::Calculate() in a
+           state that would otherwise stomp cutoff-cmd back to true on
+           the very next frame). Engine 2 (tail rotor, FGElectric) keeps
+           its own simple per-engine set-running. -->
+      <condition> simulation/sim-time-sec ge 0.1 </condition>
+      <set name="propulsion/engine[0]/starter-cmd" value="1"/>
+      <set name="propulsion/engine[1]/starter-cmd" value="1"/>
+      <set name="propulsion/engine[0]/cutoff-cmd" value="0"/>
+      <set name="propulsion/engine[1]/cutoff-cmd" value="0"/>
+      <set name="propulsion/engine[2]/set-running" value="1"/>
+      <set name="fcs/collective-cmd-norm" value="0.0"/>
+      <set name="fcs/adj/collective-bias" value="0.0"/>
+      <set name="ap/attitude-hold-on" value="1.0"/>
+    </event>
+
+    <event name="hold-attitude" persistent="true">
+      <condition> simulation/sim-time-sec ge 0.0 </condition>
+      <set name="ap/attitude-hold-on" value="1.0"/>
+    </event>
+
+    <event name="hold-ground-settle" persistent="true">
+      <!-- 120s, not a guess: scripts/test_mi17_ground_run_idle.xml
+           measured the governor actually converging to target-rpm in
+           this window (shaft-rpm 187.0 at 30s, 191.6 at 60s, 192.0 by
+           90-120s) with this same corrected rotor. -->
+      <condition> simulation/sim-time-sec le 119.999 </condition>
+      <set name="fcs/collective-cmd-norm" value="0.0"/>
+      <set name="fcs/adj/collective-bias" value="0.0"/>
+    </event>
+
+    <event name="ramp-collective-bias" persistent="false">
+      <!-- The first cut of this rewrite still restored collective-bias
+           as an instantaneous 0.0 -> 0.15 rad step at t=120s (only the
+           collective-cmd-norm portion was ramped); that reproduced the
+           exact same abrupt-0.15-rad-jump mechanism already diagnosed
+           as dangerous for this rotor (see the collective-cmd-norm
+           ramp comment below), just moved later; it triggered a
+           catastrophic blowup (KCAS ~306, all four gear units cycling
+           WOW within a 7.5ms window) within 6 seconds, at t~126s.
+           Ramping the bias itself, not just cmd-norm, fixes that. -->
+      <condition> simulation/sim-time-sec ge 120.0 </condition>
+      <set name="fcs/adj/collective-bias" value="0.15" action="FG_RAMP" tc="20.0"/>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> propulsion/gearbox[0]/shaft-rpm </property>
+        <property> propulsion/engine[0]/n1 </property>
+        <property> position/h-agl-ft </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint mid-bias-ramp (130s)" persistent="false">
+      <condition> simulation/sim-time-sec ge 130.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> fcs/adj/collective-bias </property>
+        <property> propulsion/engine[0]/collective-ctrl-rad </property>
+        <property> propulsion/engine[0]/thrust-lbs </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="hold trim collective, engage altitude hold" persistent="true" continuous="true">
+      <!-- Closed-loop climb-out: replaces the old open-loop ramp to
+           0.75 followed by a late handoff/backoff to 0.68. Starts once
+           the bias ramp above has finished (140s). Ramps collective
+           directly to the true hover-trim value (~0.092, back-computed
+           from a validated near-zero-v-down equilibrium via rotor_
+           control.xml's collective chain; see this script's description)
+           and engages altitude hold at the same instant, rather than
+           first driving a large excursion and correcting it afterward.
+           No h-agl-ft gate is needed here (unlike the old handoff): the
+           collective baseline is already the genuine trim value, not an
+           aggressive climb target, so there is no large open-loop
+           excursion for a late gate to guard against.
+
+           persistent + continuous, not a one-shot event: same reasoning
+           as this session's other hold-mode events; continuous="true"
+           is FGScript's mechanism for a <set> (FG_RAMP included) to keep
+           re-applying every frame after it saturates at its target, so
+           this event's <set>s remain the sole, permanent owner of these
+           properties for the rest of the run. -->
+      <condition> simulation/sim-time-sec ge 140.0 </condition>
+      <set name="ap/altitude-target-ft" value="2313.5"/>
+      <set name="ap/altitude-hold-on" value="1.0"/>
+      <set name="fcs/collective-cmd-norm" value="0.092" action="FG_RAMP" tc="10.0"/>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> fcs/collective-cmd-norm </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 165s" persistent="false">
+      <condition> simulation/sim-time-sec ge 165.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> fcs/collective-cmd-norm </property>
+        <property> propulsion/engine[0]/collective-ctrl-rad </property>
+        <property> propulsion/engine[0]/thrust-lbs </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 185s" persistent="false">
+      <condition> simulation/sim-time-sec ge 185.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> fcs/collective-cmd-norm </property>
+        <property> propulsion/engine[0]/collective-ctrl-rad </property>
+        <property> propulsion/engine[0]/thrust-lbs </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 200s" persistent="false">
+      <condition> simulation/sim-time-sec ge 200.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 215s" persistent="false">
+      <condition> simulation/sim-time-sec ge 215.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 30s post-handoff" persistent="false">
+      <condition> simulation/sim-time-sec ge 245.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+        <property> propulsion/gearbox[0]/shaft-rpm </property>
+        <property> propulsion/engine[0]/torque-lbsft </property>
+        <property> propulsion/engine[2]/antitorque-ctrl-rad </property>
+        <property> propulsion/engine[2]/thrust-lbs </property>
+        <property> fcs/collective-cmd-norm </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 60s post-handoff" persistent="false">
+      <condition> simulation/sim-time-sec ge 275.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 120s post-handoff" persistent="false">
+      <condition> simulation/sim-time-sec ge 335.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 300s post-handoff" persistent="false">
+      <condition> simulation/sim-time-sec ge 515.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 450s post-handoff" persistent="false">
+      <condition> simulation/sim-time-sec ge 665.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 600s post-handoff" persistent="false">
+      <condition> simulation/sim-time-sec ge 815.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 750s post-handoff" persistent="false">
+      <condition> simulation/sim-time-sec ge 965.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 900s post-handoff" persistent="false">
+      <condition> simulation/sim-time-sec ge 1114.9 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+        <property> propulsion/gearbox[0]/shaft-rpm </property>
+        <property> propulsion/engine[0]/n1 </property>
+        <property> propulsion/engine[0]/thrust-lbs </property>
+      </notify>
+    </event>
+
+    <!-- Extra checkpoints past the original 1320s end, added when the
+         run was extended to 3000s to see whether the altitude-integral
+         term actually converges to the ~30 ft AGL target rather than
+         just continuing to trend toward it indefinitely. The CSV
+         output above is the authoritative continuous record; these
+         are just readable anchor points in the text log. -->
+    <event name="checkpoint 1500s" persistent="false">
+      <condition> simulation/sim-time-sec ge 1500.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> ap/altitude-integral-cmd </property>
+        <property> fcs/collective-cmd-norm </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 2000s" persistent="false">
+      <condition> simulation/sim-time-sec ge 2000.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> ap/altitude-integral-cmd </property>
+        <property> fcs/collective-cmd-norm </property>
+      </notify>
+    </event>
+
+    <event name="checkpoint 2500s" persistent="false">
+      <condition> simulation/sim-time-sec ge 2500.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> ap/altitude-integral-cmd </property>
+        <property> fcs/collective-cmd-norm </property>
+      </notify>
+    </event>
+
+    <event name="final checkpoint 2990s" persistent="false">
+      <condition> simulation/sim-time-sec ge 2990.0 </condition>
+      <notify>
+        <property> simulation/sim-time-sec </property>
+        <property> position/h-agl-ft </property>
+        <property> velocities/v-down-fps </property>
+        <property> velocities/vt-fps </property>
+        <property> attitude/pitch-rad </property>
+        <property> attitude/roll-rad </property>
+        <property> velocities/r-rad_sec </property>
+        <property> ap/altitude-integral-cmd </property>
+        <property> propulsion/gearbox[0]/shaft-rpm </property>
+        <property> propulsion/engine[0]/n1 </property>
+        <property> propulsion/engine[0]/thrust-lbs </property>
+      </notify>
+    </event>
+
+  </run>
+
+</runscript>

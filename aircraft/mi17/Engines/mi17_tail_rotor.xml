@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+
+<rotor name="mi17_tail_rotor">
+
+    <!-- diameter: real Mi-17 figure from the type's dimensioned
+         general-arrangement drawing, Ø3,908 mm = 12.822 ft (previously
+         10.5 ft, an undersized placeholder). -->
+    <diameter unit="FT">                  12.822 </diameter>
+    <numblades>                             3 </numblades>
+    <!-- gearratio/nominalrpm match real Mi-17 figures: tail rotor
+         nominal is ~1200 RPM. Real tail rotor drive shaft speed
+         (~2594 RPM, between the main gearbox's tail takeoff and the
+         tail rotor's own local 90-degree gearbox) isn't separately
+         representable here; FGRotor's ExternalRPM=0 path only knows
+         the single end-to-end ratio from the main rotor's own
+         reference (SourceGearRatio, mi17_main_rotor.xml's gearratio)
+         down to this rotor's blade RPM: 192 (main rotor nominal) x
+         (78.125/GearRatio) = 1200  =>  GearRatio = 15000/1200 = 12.5,
+         which cross-checks against the 15000 -> 2594 -> 1200 real
+         two-stage path (15000/2594 x 2594/1200 = 12.5 within rounding).
+         Previously 4.2/1134.0, a placeholder pair consistent with the
+         old (also placeholder) main rotor gearratio=18.5. -->
+    <gearratio>                        12.5 </gearratio>
+    <nominalrpm>                       1200.0 </nominalrpm>
+    <!-- chord: real Mi-17 manual figure, 270mm = 0.886 ft (previously
+         0.8 ft, an unsourced placeholder). Cross-checks well against
+         the manual's own stated rotor solidity (0.135): numblades(3) x
+         chord(0.886ft) / (pi x radius(6.411ft)) = 0.132, matching
+         within rounding. Manual also gives blade profile NACA-230M
+         (not separately representable here; liftcurveslope below is
+         left as-is, a generic value already in the right ballpark for
+         that airfoil family) and blade mass 13.5 kg (not currently
+         used by any property here). -->
+    <chord unit="FT">                  0.886 </chord>
+    <flappingmoment unit="SLUG*FT2">     2.5 </flappingmoment>
+    <liftcurveslope>                      6.0 </liftcurveslope>
+    <twist>                               0.0 </twist>
+    <massmoment>                         0.8 </massmoment>
+    <tiplossfactor>                       1.0 </tiplossfactor>
+    <inflowlag>                          0.10 </inflowlag> 
+    <hingeoffset unit="FT">             0.02 </hingeoffset>
+
+    <!-- Tail rotor RPM is slaved to the main rotor via ExternalRPM=0,
+         exactly matching the original (pre-gearbox) Mi-17 model's design
+         and FGRotor.h's own documented tail-rotor pattern: "the rotor
+         needs to be attached to a dummy engine" (mi17_tail_engine, a flat
+         50 HP electric_engine, provides collective/control mapping and
+         torque bookkeeping only) "and ExternalRPM 0 links the tail
+         rotor's RPM to the main (=first, =0) rotor".
+
+         thruster_engine_num for the main gearbox's shared rotor is the
+         LOWEST referenced <input engine="x"> index (FGGearbox.cpp), which
+         is 0 here (mi17_main_engine_1); deliberately "the same slot a
+         single dummy engine would occupy for a non-gearbox rotor" per
+         that file's own comment, so this ExternalRPM=0 reference resolves
+         to the right property (propulsion/engine[0]/rotor-rpm) without
+         needing to know anything about the gearbox internally.
+
+         This only works because of a fix in src/models/propulsion/
+         FGRotor.cpp: engines are always fully loaded before any <gearbox>
+         is parsed (FGPropulsion::Load()'s two-pass design), so when this
+         tail rotor constructs, engine 0's thruster (owned by the gearbox)
+         does not exist yet. FGRotor's ExternalRPM binding used to resolve
+         eagerly at construction time and crashed on that null Thruster;
+         it now defers/retries the same binding every frame from
+         CalcRotorState() until the source becomes available, which is
+         guaranteed by the time any Calculate() runs. -->
+    <controlmap> TAIL </controlmap>
+    <ExternalRPM> 0 </ExternalRPM>
+
+</rotor>

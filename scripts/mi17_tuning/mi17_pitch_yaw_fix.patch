@@ -1,0 +1,97 @@
+diff --git a/aircraft/mi17/Systems/afcs.xml b/aircraft/mi17/Systems/afcs.xml
+index 550df1f..6f11117 100644
+--- a/aircraft/mi17/Systems/afcs.xml
++++ b/aircraft/mi17/Systems/afcs.xml
+@@ -18,10 +18,16 @@
+   <property value="1.0"> ap/stability-aug-on </property>
+ 
+   <!-- AFCS gains -->
+-  <property value="0.5"> ap/pitch-gain </property>
++  <!-- ap/pitch-gain sign corrected from +0.5 to -0.5: positive elevator command pitches the nose DOWN in this
++       model, so the pitch attitude hold has to command the opposite sign of the pitch error. With +0.5 it was
++       positive feedback (masked while the aircraft spun fast in yaw). See scripts/mi17_tuning/REPORT.md. -->
++  <property value="-0.5"> ap/pitch-gain </property>
+   <property value="0.5"> ap/roll-gain </property>
+   <property value="0.3"> ap/yaw-gain </property>
+   <property value="0.4"> ap/collective-gain </property>
++  <!-- Yaw-rate command: rad/s of yaw rate per unit of pedal (fcs/rudder-cmd-norm; negative = yaw right).
++       Full pedal commands about 86 deg/s. Set to 0 to make the pedal a plain direct input again. -->
++  <property value="1.5"> ap/yaw-rate-per-pedal </property>
+   <!-- Declared at system scope, not inside the "altitude hold"
+        channel below where it's used: a <property> element nested
+        inside a <channel> is not registered in time for a same-
+@@ -319,7 +325,8 @@
+       <function>
+         <product>
+           <property> velocities/q-rad_sec </property>
+-          <value> -0.1 </value>
++          <!-- sign corrected from -0.1 to +0.1 (pitch rate damper; same convention as ap/pitch-gain above) -->
++          <value> 0.1 </value>
+           <property> ap/stability-aug-on </property>
+         </product>
+       </function>
+@@ -335,12 +342,46 @@
+       </function>
+     </fcs_function>
+ 
++    <!-- Yaw stabiliser: sign corrected from -0.05 to +0.4, plus a yaw-rate integrator. With the tail rotor's
++         in-flight sensitivity (about -25 rad/s per rad of pitch) the original sign was positive feedback and
++         latched the hover yaw at the tail rotor clamp (about -4.5 rad/s). The integrator (clipped +-0.3 rad)
++         removes the residual steady-state yaw. Together with the pitch-channel sign fixes above and
++         fcs/adj/pedal-torque-mix-gain = 0.0000087 (rotor_control.xml), hover yaw is about 0.005 rad/s.
++         See scripts/mi17_tuning/REPORT.md in the Sim/jsbsim repo. -->
++    <!-- Yaw-rate command mode: the stabiliser tracks a yaw rate requested by the pilot instead of always
++         holding zero. Error = actual yaw rate minus the requested rate, and the requested rate is
++         -ap/yaw-rate-per-pedal * fcs/rudder-cmd-norm (negative pedal command = yaw right). With the pedal
++         centred this reduces to the plain yaw-rate hold above. -->
++    <fcs_function name="ap/yaw-rate-error">
++      <function>
++        <sum>
++          <property> velocities/r-rad_sec </property>
++          <product>
++            <property> fcs/rudder-cmd-norm </property>
++            <property> ap/yaw-rate-per-pedal </property>
++          </product>
++        </sum>
++      </function>
++    </fcs_function>
++    <integrator name="ap/sas-yaw-integral">
++      <input> ap/yaw-rate-error </input>
++      <c1> 0.2 </c1>
++      <clipto>
++        <min> -0.3 </min>
++        <max>  0.3 </max>
++      </clipto>
++    </integrator>
+     <fcs_function name="ap/sas-yaw-cmd">
+       <function>
+         <product>
+-          <property> velocities/r-rad_sec </property>
+-          <value> -0.05 </value>
+           <property> ap/stability-aug-on </property>
++          <sum>
++            <product>
++              <property> ap/yaw-rate-error </property>
++              <value> 0.4 </value>
++            </product>
++            <property> ap/sas-yaw-integral </property>
++          </sum>
+         </product>
+       </function>
+     </fcs_function>
+diff --git a/aircraft/mi17/Systems/rotor_control.xml b/aircraft/mi17/Systems/rotor_control.xml
+index fee0972..2fa8b50 100644
+--- a/aircraft/mi17/Systems/rotor_control.xml
++++ b/aircraft/mi17/Systems/rotor_control.xml
+@@ -448,7 +448,10 @@
+        below for the corrected clamp values). Resolved so the true
+        20.5 deg / 0.358 rad ceiling maps to 27500 ft-lb instead:
+        gain = (0.358 - bias) / 27500 ~= 0.0000174 rad per ft-lb. -->
+-  <property value='0.0000174'> fcs/adj/pedal-torque-mix-gain </property>
++  <!-- Reduced from 0.0000174 to 0.0000087: the original put the feedforward at the tail rotor clamp (0.358 rad)
++       at hover torque, but the tail rotor balances hover torque at about 0.12 to 0.2 rad (measured by pinning
++       the tail rotor pitch; see scripts/mi17_tuning/REPORT.md in the Sim/jsbsim repo). -->
++  <property value='0.0000087'> fcs/adj/pedal-torque-mix-gain </property>
+   <property value='-0.12'> fcs/adj/pedal-col-mix-bias </property>
+ 
+   <channel name="pedal">

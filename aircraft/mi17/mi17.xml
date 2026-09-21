@@ -1,0 +1,756 @@
+<?xml version="1.0"?>
+<fdm_config name="mi17-jsbsim" release="ALPHA" version="2.0">
+  
+  <fileheader>
+    <author> JSBSim Mi-17 Model </author>
+    <email> pcpdesilva@gmail.com </email>
+    <filecreationdate>2024-01-01</filecreationdate>
+    <version>$Revision: 0.1</version>
+    <description> Models a Mil Mi-17 helicopter (Hip-H). </description>
+
+    <reference refID="MI17" author="Mil Moscow Helicopter Plant" title="Mi-17 Helicopter Technical Manual" date="1980"/>
+    <reference refID="BR59" author="Bramwell, A. R. S." title="Longitudinal stability and control of the single rotor helicopter - Aeronautical Research Council R&amp;M 3104" date="1959"/>
+    <reference refID="TA82" author="Talbot, Peter D., Tinling, Bruce E., Decker, William A., and Chen, Robert T. N." title="A Mathematical Model of a Single Main Rotor Helicopter for Piloted Simulation - NASA TM-84281" date="1982"/>
+
+    <note> Aerodynamic helicopter model in wind axes.
+           Trigonometric functions are used to cover the full alpha/beta range (See /TA82/). </note>
+
+    <note> Wing aerodynamics are calculated in the same manner as in fixed wing aircraft.
+           The other contributions use helicopter specific quantities. </note>
+
+    <note> Additional setup options are in the 'aerodynamics' section </note>
+
+    <note> The model includes comprehensive electrical and hydraulic systems. </note>
+
+    <limitation> The rotor downwash adds an varying 'wind' system, thus some axis transforms
+                 occur in the 'aerodynamics' section.
+                 Currently this is an experimental (read: 'not so funny') feature. The calculations
+                 used are *not* valid for pure sideward flight at high speeds, but should be OK
+                 for common forward/backward flight conditions. </limitation>
+
+    <limitation> Horizontal tail incidence variation ('elevator') is experimental. </limitation>
+
+    <limitation> Estimation of fuselage moments is rather fair. </limitation>
+
+    <license>
+      <licenseName>GPL</licenseName>
+      <licenseURL>http://www.gnu.org/licenses/gpl.html</licenseURL>
+    </license>
+
+  </fileheader>
+  
+  <metrics>
+    <wingarea unit="FT2">         25.0 </wingarea>         <!-- metrics/Sw-sqft  -->
+    <wingspan unit="FT">          12.0 </wingspan>         <!-- metrics/bw-ft    -->
+    <wing_incidence unit="DEG">    0.0 </wing_incidence>   <!-- metrics/iw-deg   -->
+    <chord unit="FT">              2.08 </chord>            <!-- metrics/cbarw-ft -->
+    <htailarea unit="FT2">        18.0 </htailarea>        <!-- metrics/Sh-sqft  -->
+    <htailarm unit="FT">          20.0 </htailarm>         <!-- metrics/lh-ft    -->
+    <vtailarea unit="FT2">        22.0 </vtailarea>        <!-- metrics/Sv-sqft  -->
+    <vtailarm unit="FT">          22.0 </vtailarm>         <!-- metrics/lv-ft    -->
+
+    <location name="AERORP" unit="IN">
+       <x> 200.0 </x>
+       <y>   0.0 </y>
+       <z>  60.0 </z>
+    </location>
+    <location name="EYEPOINT" unit="IN">
+       <x> 150.0 </x>
+       <y>   0.0 </y>
+       <z>  90.0 </z>
+    </location>
+    <location name="VRP" unit="IN">
+      <x>   0.0 </x>
+      <y>   0.0 </y>
+      <z>   0.0 </z>
+    </location>
+  </metrics>
+  
+  <mass_balance>
+    <!-- ESTIMATE, not manual data (no Mi-17 inertia figures exist in
+         any reference we have; weight-and-balance manuals essentially never publish
+         them). Replaces the old placeholder, which was just a ~1.4x
+         scale-up of ah1s.xml's own placeholder inertia (2593/14320/
+         12330); i.e. never Mi-17-derived at all. Built as a lumped
+         component-mass model, parallel-axis-summed about the real CG
+         above; to be refined once better data exists.
+
+         Real/sourced inputs used:
+         - Main rotor blades (5 x 137 kg = 46.94 slug total, real mass;
+           R=34.931 ft, hingeoffset=0.72178 ft = real 220mm, both from
+           mi17_main_rotor.xml). Modeled as a spinning disk smeared
+           over one revolution (standard treatment when rotor RPM >>
+           body rates, e.g. the TA82 reference already cited in this
+           file's fileheader): for a uniform blade from hinge to tip,
+           radius of gyration^2 about the shaft = (R^3-hingeoffset^3)
+           / (3*(R-hingeoffset)) = 415.30 ft^2. Contributes 0.5*N*m*
+           rgyr^2 = 9746.6 slug*ft2 to Ixx and Iyy (roll/pitch), and
+           N*m*rgyr^2 = 19493.3 slug*ft2 to Izz (yaw, shaft ~vertical).
+           This Izz figure landing almost exactly on mi17_main_rotor.
+           xml's own <polarmoment> (19493.24) is a strong cross-check,
+           even though they answer different questions: polarmoment
+           drives FGRotor's own rotor-RPM spin-up dynamics (relative
+           to the airframe), while this Izz term is the fuselage's
+           own yaw inertia from the same rigidly-geared rotor mass;
+           both real, both needed, not double-counting.
+         - Landing gear (real stations from ground_reactions above,
+           main_gear at x=180, y=+-88.78, z=-8) and tail rotor/gearbox
+           (real thruster mount, x=580, y=20, z=140); positions are
+           sourced, masses are the generic fractions below.
+
+         Estimated (generic, NOT Mi-17-sourced) mass split of the
+         501.3 slug empty mass, after removing the 46.94 slug of real
+         rotor blade mass (typical group-weight fractions for a
+         twin-turbine medium helicopter, applied to the remaining
+         454.37 slug):
+         - nose/cockpit group, 10% = 45.44 slug at x=30 (near the
+           pilots' real station, per the weight-and-balance manual's crew arms)
+         - main cabin/engines/gearbox/systems cluster, 75% = 340.78
+           slug at x=200 (at the mast/CG, so its exact split barely
+           matters: this lump contributes under 3% of any final axis
+           total, confirmed by direct calculation)
+         - landing gear, 1.5% each side = 6.82 slug at each real gear
+           station
+         - tail boom, 10% = 45.44 slug, modeled as a uniform rod from
+           x=220 to x=580 (own moment (1/12)*m*L^2 plus parallel-axis
+           shift of its center)
+         - tail rotor/gearbox structure, 2% = 9.09 slug at the real
+           thruster mount
+
+         Result: Ixx=11872.6, Iyy=45209.4, Izz=54372.8 slug*ft2;
+         roughly 3.4x/2.4x/3.3x the old placeholder. The rotor blades'
+         own contribution alone (9746.6/9746.6/19493.3) is ~80% of
+         Ixx, ~22% of Iyy, ~36% of Izz; i.e. this correction is
+         dominated by the real, sourced rotor mass/geometry, not by
+         the generic fuselage-fraction assumptions, so it should be
+         fairly robust even before further refinement. This also
+         directly targets the flapping-instability finding in docs/
+         testing/mi17-rotor-flapping-instability.md: the old Ixx=3500
+         understated roll inertia by ~3.4x against the rotor hub
+         moment (mf), which this correction should meaningfully
+         reduce (M/Ixx angular acceleration drops by the same ratio).
+         ixz: still 0.0, no data or reason to assume asymmetry. -->
+    <ixx unit="SLUG*FT2">   11872.6 </ixx>
+    <iyy unit="SLUG*FT2">   45209.4 </iyy>
+    <izz unit="SLUG*FT2">   54372.8 </izz>
+    <ixz unit="SLUG*FT2">       0.0 </ixz>
+
+    <!-- Real factory data, Mi-17V-5 Weight and Balance Manual, Tables
+         3/4/5 (empty helicopter weight line, identical in all three):
+         7316.0 kg at CG X = -0.094 m. The manual's balance-data
+         coordinate system (section 3 BALANCE DATA, 3.1.2) has its
+         origin at the intersection of the main rotor shaft axis and
+         the flapping-hinge-plane axis (i.e. the mast), with X positive
+         FORWARD; this is confirmed internally by extreme-forward-CG
+         configs landing at positive X and extreme-aft-CG configs at
+         negative X. mi17.xml's own main rotor thruster is at x=200 IN
+         (structural X, positive AFT, per the existing nose/main/tail
+         gear stations), so the manual's origin maps to this file's
+         x=200. -0.094 m = 3.701 in AFT of the mast -> x=203.70.
+         emptywt: 7316.0 kg = 16,129 lb.
+         CG y/z: not given anywhere in the manual (section 3.2.1's
+         formula is explicitly X-coordinate only); left as previous
+         placeholders, not yet sourced. -->
+    <emptywt unit="LBS">   16129.0 </emptywt>
+    <location name="CG" unit="IN">
+      <x>   203.70 </x>
+      <y>     0.0 </y>
+      <z>    80.0 </z>
+    </location>
+  </mass_balance>
+  
+  <ground_reactions>
+    <!-- Gear layout corrected from real Mi-17 dimensions (user-supplied
+         from the type's dimensioned general-arrangement drawing):
+         nose-gear-to-main-gear wheelbase = 4.281 m = 168.543 in, main
+         gear track = 4.510 m = 177.559 in. Previously main_gear was at
+         x=180 (already close to mass_balance's CG x=200) but nose_gear
+         was at x=350, AFT of both the main gear and the CG, the
+         opposite of a real nose-gear layout, with only a ~60 in main
+         gear half-track (a ~120 in / 3.05 m track, well under the real
+         4.510 m). With only the main gear grounded (which touch down
+         first) and the CG sitting aft of that single support line, the
+         aircraft had nothing resisting rotation the instant it settled
+         onto the ground: a runaway pitch divergence starting within
+         the first ~0.3s of any ground test, present even with every
+         flight-control/autopilot channel disabled, that would
+         eventually couple into a full roll/tumble and tail strike,
+         this was the actual root cause of the ground-contact
+         instability chased earlier in this branch's history, not a
+         propulsion or FCS issue. main_gear x is kept as the anchor
+         (already reasonable, close to CG/mast) and nose_gear x is
+         derived from it by the real wheelbase: 180 - 168.543 = 11.457,
+         i.e. very close to the nose reference, consistent with the
+         drawing's nose gear position tucked right under the cockpit. -->
+    <contact type="BOGEY" name="main_gear_left">
+      <location unit="IN">
+        <x>    180.0 </x>
+        <y>   -88.78 </y>
+        <z>    -8.0 </z>
+      </location>
+      <static_friction>    0.85  </static_friction>
+      <dynamic_friction>   0.65  </dynamic_friction>
+      <rolling_friction>   0.65  </rolling_friction>
+      <spring_coeff unit="LBS/FT">        8000.0 </spring_coeff>
+      <damping_coeff unit="LBS/FT/SEC">   1600.0 </damping_coeff>
+      <brake_group> NONE </brake_group>
+      <max_steer> 0 </max_steer>
+    </contact>
+    <contact type="BOGEY" name="main_gear_right">
+      <location unit="IN">
+        <x>   180.0 </x>
+        <y>    88.78 </y>
+        <z>    -8.0 </z>
+      </location>
+      <static_friction>    0.85  </static_friction>
+      <dynamic_friction>   0.65  </dynamic_friction>
+      <rolling_friction>   0.65  </rolling_friction>
+      <spring_coeff unit="LBS/FT">        8000.0 </spring_coeff>
+      <damping_coeff unit="LBS/FT/SEC">   1600.0 </damping_coeff>
+      <brake_group> NONE </brake_group>
+      <max_steer> 0 </max_steer>
+    </contact>
+    <contact type="BOGEY" name="nose_gear">
+      <location unit="IN">
+        <x>    11.46 </x>
+        <y>     0.0 </y>
+        <z>    -6.0 </z>
+      </location>
+      <static_friction>    0.85  </static_friction>
+      <dynamic_friction>   0.65  </dynamic_friction>
+      <rolling_friction>   0.65  </rolling_friction>
+      <spring_coeff unit="LBS/FT">        6000.0 </spring_coeff>
+      <damping_coeff unit="LBS/FT/SEC">   1200.0 </damping_coeff>
+      <brake_group> NONE </brake_group>
+      <max_steer> 0 </max_steer>
+    </contact>
+    <contact type="STRUCTURE" name="tail_bumper">
+      <location unit="IN">
+        <x>   600.0 </x>
+        <y>     0.0 </y>
+        <z>    50.0 </z>
+      </location>
+      <static_friction>    0.85  </static_friction>
+      <dynamic_friction>   0.65  </dynamic_friction>
+      <rolling_friction>   0.65  </rolling_friction>
+      <spring_coeff unit="LBS/FT">         8000.0 </spring_coeff>
+      <damping_coeff unit="LBS/FT/SEC">    2500.0 </damping_coeff>
+    </contact>
+  </ground_reactions>
+  
+  <propulsion>
+    <!-- Main rotor drive: two TV3-117MT sides combined through
+         FGGearbox into the single main rotor shaft (feature/REQ-003-
+         fggearbox). Each <engine> below is gearbox-fed, so it carries
+         no inline <thruster> of its own; see aircraft/gearbox_test/
+         gearbox_test.xml, this branch's own reference fixture, for the
+         pattern this follows. -->
+    <engine file="mi17_main_engine_1">
+      <feed>0</feed>
+      <feed>1</feed>
+      <feed>2</feed>
+    </engine>
+    <engine file="mi17_main_engine_2">
+      <feed>0</feed>
+      <feed>1</feed>
+      <feed>2</feed>
+    </engine>
+
+    <gearbox name="mi17-main-gearbox">
+      <!-- gearmoment/enginemoment rescaled 4.784x (2391.89/9567.57,
+           from 500.0/2000.0) after mi17_main_rotor.xml's polarmoment
+           was corrected from 4500 (unsourced placeholder) to 21527.04
+           (derived from a real 137 kg blade mass): these were
+           empirically tuned for numerical stability against the OLD
+           polarmoment scale, and left badly mismatched (too small
+           relative to the rotor) once polarmoment jumped ~4.8x,
+           observed as a fast, severe, unrecovered crash within ~2s of
+           engine start on the corrected rotor. Scaled by the same
+           ratio polarmoment itself grew, keeping the same relative
+           balance between gearbox and rotor inertia that was already
+           validated as stable. maxbrakepower/enginefriction: still
+           unsourced placeholders, reused from aircraft/gearbox_test/
+           gearbox_test.xml's own fixture values (not derived from
+           Mi-17 data). gearratio matches mi17_main_rotor.xml's own
+           gearratio (78.125, real Mi-17 figure: 15000 RPM engine input
+           / 192 RPM main rotor nominal) on both channels, since both
+           engines drive the same shaft at the same ratio. -->
+      <gearmoment unit="SLUG*FT2"> 2391.89 </gearmoment>
+      <maxbrakepower unit="HP">     50.0 </maxbrakepower>
+
+      <input engine="0">
+        <gearratio>                    78.125 </gearratio>
+        <enginemoment unit="SLUG*FT2"> 9567.57 </enginemoment>
+        <enginefriction unit="HP">       1.0 </enginefriction>
+      </input>
+      <input engine="1">
+        <gearratio>                    78.125 </gearratio>
+        <enginemoment unit="SLUG*FT2"> 9567.57 </enginemoment>
+        <enginefriction unit="HP">       1.0 </enginefriction>
+      </input>
+
+      <thruster file="mi17_main_rotor">
+        <location unit="IN">
+          <x>   200.0 </x>
+          <y>     0.0 </y>
+          <z>   180.0 </z>
+        </location>
+        <orient unit="DEG">
+          <roll>   0.0 </roll>
+          <pitch> 90.0 </pitch>
+          <yaw>    0.0 </yaw>
+        </orient>
+        <sense> 1 </sense>
+      </thruster>
+    </gearbox>
+
+    <!-- Tail rotor engine -->
+    <engine file="mi17_tail_engine">
+      <feed>0</feed>
+      <feed>1</feed>
+      <feed>2</feed>
+      <thruster file="mi17_tail_rotor">
+        <location unit="IN">
+          <x> 580.0 </x>
+          <y>  20.0 </y>
+          <z> 140.0 </z>
+        </location>
+        <orient unit="DEG">
+          <roll>  0.0 </roll>
+          <pitch> 0.0 </pitch>
+          <yaw>  90.0 </yaw>
+        </orient>
+        <!-- 1 (CCW), same as the main rotor's own <sense>. Tested -1
+             (CW): rather than reducing the residual hover yaw, it
+             caused r-rad_sec to diverge from t=0 (-7.0 rad/sec at
+             t=0.39s, accelerating to -13.2 by t=0.95s, monotonically,
+             not settling) instead of the steady, bounded ~-6.7 rad/sec
+             seen at sense=1. This disproves the hypothesis that the
+             tail rotor's own reaction torque (FGRotor::body_moments()'s
+             Torque*Sense term, the only place Sense is read in
+             FGRotor.cpp) was compounding the disturbance at sense=1;
+             if anything sense=1 is providing real damping that sense=-1
+             removes. Root cause of the residual ~6.7 rad/sec yaw is
+             still open; see rotor_control.xml's antitorque comments. -->
+        <sense> 1 </sense>
+      </thruster>
+    </engine>
+    <!-- Fuel tanks: real Mi-17 layout is 1 internal service tank plus 2
+         external (left/right) tanks, not the previous 2 centerline
+         tanks. Two independent real sources cross-validate here:
+
+         - Cera Sim MI-17 V5 Quick Start Manual (References/CSMI17_
+           Manual.pdf, page 4, "Fuel Capacity" table): service tank
+           109.6 gal = 415 l; each external tank 294 gal = 1114 l.
+         - Mi-17V-5 factory Weight and Balance Manual (user-supplied
+           photos, Table 3, "Normal takeoff weight", fuel line, SG
+           0.775 kg/l): service tank 322.0 kg at CG X=-1.320 m; both
+           external tanks combined 1640.0 kg at CG X=-0.025 m. Dividing
+           by 0.775 kg/l: service ~415.5 l (matches Cera Sim's 415 l
+           almost exactly); external combined ~2116 l (~1058 l/side,
+           within ~5% of Cera Sim's 1114 l/side; the weight-and-balance table's
+           figure is explicitly a reduced "50 kg less" load-out, not
+           full capacity, which accounts for the gap).
+
+         capacity: Cera Sim liters x 0.800 kg/l (matches the weight-and-balance
+         manual's own Table 5 specific gravity, and this file's
+         existing type="FUEL"/JP-5). service: 415 l -> 332.0 kg =
+         732.1 lb. external (each): 1114 l -> 891.2 kg = 1964.6 lb.
+
+         contents: taken directly from the weight-and-balance manual's Table 3 normal-
+         takeoff fuel load (a real, sourced in-service fuel state, not
+         an arbitrary fill fraction): service 322.0 kg = 709.9 lb;
+         external 1640.0 kg total / 2 = 820.0 kg = 1807.8 lb each.
+
+         x: derived from the weight-and-balance manual's CG arms, which are given
+         relative to the main rotor mast (see mass_balance's CG
+         comment for the coordinate-system derivation; mast is at
+         x=200 IN in this file). service arm -1.320 m = 51.97 in AFT
+         of the mast -> x=251.97. external arm -0.025 m = 0.98 in AFT
+         of the mast -> x=200.98 (external tanks sit almost directly
+         below the mast longitudinally, matching real Mi-8/17 photos
+         where the drum tanks are slung along the cabin sides near
+         the main gearbox deck).
+
+         y: NOT given anywhere in the weight-and-balance manual (its balance-data
+         section solves only the X-coordinate, see mass_balance's CG
+         comment); +/-40 in is an unsourced placeholder to give the
+         two external tanks the real left/right asymmetry they
+         physically have, not a drawing-derived figure.
+
+         z: left at the previous placeholder (45 in), also not
+         sourced. -->
+    <tank number="0" type="FUEL">
+      <location unit="IN">
+        <x>   251.97 </x>
+        <y>     0.0 </y>
+        <z>    45.0 </z>
+      </location>
+      <capacity unit="LBS">     732.1 </capacity>
+      <contents unit="LBS">     709.9 </contents>
+      <type>JP-5</type>
+    </tank>
+    <tank number="1" type="FUEL">
+      <location unit="IN">
+        <x>   200.98 </x>
+        <y>    40.0 </y>
+        <z>    45.0 </z>
+      </location>
+      <capacity unit="LBS">    1964.6 </capacity>
+      <contents unit="LBS">    1807.8 </contents>
+      <type>JP-5</type>
+    </tank>
+    <tank number="2" type="FUEL">
+      <location unit="IN">
+        <x>   200.98 </x>
+        <y>   -40.0 </y>
+        <z>    45.0 </z>
+      </location>
+      <capacity unit="LBS">    1964.6 </capacity>
+      <contents unit="LBS">    1807.8 </contents>
+      <type>JP-5</type>
+    </tank>
+  </propulsion>
+  
+  <!-- Existing Systems -->
+  <system file="rpm_governor"/>
+  <system file="rotor_control"/>
+  <system file="afcs"/>
+  <system file="electrical_system"/>
+  <system file="hydraulic_system"/>
+  <system file="steady_flight_data"/>
+  <system file="trim_control"/>
+  
+  <system name="misc support">
+    <channel name="climb/approach angle">
+      <fcs_function name="attitude/pitch-deg">
+        <function>
+          <product>
+            <value> 57.2957795 </value>
+            <property> attitude/pitch-rad </property>
+          </product>
+        </function>
+      </fcs_function>
+
+      <fcs_function name="attitude/approach-angle-deg">
+        <function>
+          <difference>
+            <property> attitude/pitch-deg </property>
+            <property> aero/alpha-deg </property>
+          </difference>
+        </function>
+      </fcs_function>
+    </channel>
+
+    <channel name="mi17 instruments">
+      <fcs_function name="propulsion/engine/mi17-torque-sensor-psi">
+        <function>
+          <sum>
+            <product>
+               <value> 0.0035 </value>
+               <property> propulsion/engine/torque-lbsft </property>
+            </product>
+            <value> -5.0 </value>
+          </sum>
+        </function>
+        <output>/rotors/main/torque-sensor-psi</output> 
+      </fcs_function>
+    </channel>
+  </system>
+  
+  <flight_control name="mi17 fcs">
+    <channel name="tailplane">
+      <fcs_function name="fcs/var-incidence-ht-rad">
+        <function>
+          <description>
+            Variation of horizontal stabilizer incidence with
+            longitudinal stick position/control input.
+          </description>
+          <sum>
+            <product>
+              <value> 1.0 </value>
+              <table>
+                <independentVar> propulsion/engine/longitudinal-ctrl-rad </independentVar>
+                <tableData>
+                    -0.05   0.25
+                    -0.01   0.0
+                     0.00   -0.01
+                     0.02   -0.01
+                     0.10   0.08
+                     0.18   0.15
+                </tableData>
+              </table>
+            </product>
+            <value> 0.0 </value>
+          </sum>
+        </function>
+      </fcs_function>
+    </channel>
+
+    <channel name="downwash-delay">
+      <lag_filter name="aero/theta-downwash-delayed-rad">
+        <description>
+          Smooth downwash angle value (forward-backward), and
+          roughly account for delayed impingement on wings.
+        </description>
+        <input> propulsion/engine/theta-downwash-rad </input>
+        <c1>    12.0 </c1>
+      </lag_filter>
+      <lag_filter name="aero/phi-downwash-delayed-rad">
+        <description> Smooth left-right downwash angle. </description>
+        <input> propulsion/engine/phi-downwash-rad </input>
+        <c1>    12.0 </c1>
+      </lag_filter>
+    </channel>
+
+    <channel name="groundeffect-scale">
+      <fcs_function name="aero/groundeffect-scale">
+        <function>
+        <description> gives 1.0 in hover, 0.001 at 50kts (or ~85fps) </description>
+        <exp>
+          <product>
+            <value> -0.050 </value>
+            <property> velocities/vt-fps </property>
+          </product>
+        </exp>
+        </function>
+        <output> propulsion/engine/groundeffect-scale-norm </output>
+      </fcs_function>
+    </channel>
+  </flight_control>
+  
+  <aerodynamics>
+    <!-- Vehicle setup -->
+    <property value="0.05"> aero/setup/Nr_limiter </property>
+    <property value="1.0"> aero/setup/downwash-enable </property>
+
+    <!-- Rotor properties -->
+    <property value="26.00">   metrics/rotor/R-ft     </property>
+    <property value="2123.72"> metrics/rotor/Area-ft2 </property>
+    <property value="0.075"> metrics/rotor/solidity </property>
+
+    <!-- Reference properties -->
+    <property value="159.28">   aero/ref/area-ft2   </property>
+    <property value="4140.53"> aero/ref/volume-ft3 </property>
+    <property value="816.81">  aero/ref/vtip-fps   </property>
+
+    <function name="aero/HIhat-ps">
+      <description> Dynamic momentum, see /BR59/. </description>
+      <product>
+        <property> atmosphere/rho-slugs_ft3 </property>
+        <property> metrics/rotor/solidity   </property>
+        <property> metrics/rotor/Area-ft2   </property>
+        <property> aero/ref/vtip-fps        </property>
+        <property> metrics/rotor/R-ft       </property>
+      </product>
+    </function>
+
+    <function name="aero/HWhat-psft">
+      <description> Dynamic angular momentum, see /BR59/. </description>
+      <product>
+        <property> atmosphere/rho-slugs_ft3 </property>
+        <property> metrics/rotor/solidity   </property>
+        <property> metrics/rotor/Area-ft2   </property>
+        <property> aero/ref/vtip-fps        </property>
+        <property> metrics/rotor/R-ft       </property>
+        <property> metrics/rotor/R-ft       </property>
+      </product>
+    </function>
+
+    <function name="aero/mu">
+      <description> Common shortcut for advance ratio. </description>
+      <property> propulsion/engine/advance-ratio </property>
+    </function>
+
+    <!-- Downwash incidence and angle normalization -->
+    <function name="aero/raw-alpha-iw-rad">
+      <description> Adjust alpha for wing incidence w/o downwash. </description>
+      <sum>
+        <property> aero/alpha-rad </property>
+        <property> metrics/iw-rad </property>
+      </sum>
+    </function>
+
+    <function name="aero/alpha-iw-rad">
+      <description> Normalize to +/- pi. </description>
+      <product>
+        <value>2.0</value>
+        <atan><tan>
+          <product>
+            <value>0.5</value>
+            <property> aero/raw-alpha-iw-rad </property>
+          </product>
+        </tan></atan>
+      </product>
+    </function>
+
+    <!-- Downwash window functions -->
+    <function name="aero/downwash-window-wing">
+      <description> 
+         Turns to one if wing is immersed in downwash.
+      </description>
+      <product>
+        <table>
+          <independentVar> aero/theta-downwash-delayed-rad </independentVar>
+          <tableData>
+              -1.30  0
+              -1.26  1
+               1.26  1
+               1.30  0
+          </tableData>
+        </table>
+        <table>
+          <independentVar> aero/phi-downwash-delayed-rad </independentVar>
+          <tableData>
+              -1.37  0.0
+              -1.2   0.5
+              -1.1   1.0
+               0.0   1
+               1.1   1.0
+               1.2   0.5
+               1.37  0.0
+          </tableData>
+        </table>
+      </product>
+    </function>
+
+    <function name="aero/downwash-window-wing-value">
+      <product>
+        <property> aero/setup/downwash-enable </property>
+        <property> aero/downwash-window-wing </property>
+      </product>
+    </function>
+
+    <function name="aero/downwash-window-wing-compl">
+      <description>
+         Turns to zero if wing is immersed in downwash.
+      </description>
+      <difference>
+        <value> 1.0 </value>
+        <property> aero/downwash-window-wing-value </property>
+      </difference>
+    </function>
+
+    <!-- Coefficients -->
+    <property value="0.12"> aero/coefficient/CD0_fus   </property>
+    <property value="0.65"> aero/coefficient/CDa90_fus </property>
+    <property value="1.90"> aero/coefficient/CDb90_fus </property>
+
+    <function name="aero/coefficient/CLa_wing">
+      <description> Wing lift coefficient (a=5.5, CL_max=1.92). </description>
+      <product>
+        <table>
+          <independentVar lookup="row"> aero/alpha-iw-rad </independentVar>
+          <tableData>
+             -3.49  -1.92
+             -3.14   0.00
+             -2.79   1.92
+             -2.74   1.92
+             -1.83   0.96
+             -1.57   0.00
+             -1.31  -0.96
+             -0.40  -1.92
+             -0.35  -1.92
+              0.00   0.00
+              0.35   1.92
+              0.40   1.92
+              1.31   0.96
+              1.57   0.00
+              1.83  -0.96
+              2.74  -1.92
+              2.79  -1.92
+              3.14   0.00
+              3.49   1.92
+          </tableData>
+        </table>
+        <property> aero/downwash-window-wing-compl </property>
+        <cos> <property> aero/beta-rad </property> </cos>
+        <cos> <property> aero/beta-rad </property> </cos>
+      </product>
+    </function>
+
+    <!-- Force and moment axes -->
+    <axis name="LIFT">
+      <function name="aero/force/La_wing">
+        <description> Wing lift due to alpha, regular air stream. </description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> metrics/Sw-sqft </property>
+          <property> aero/coefficient/CLa_wing </property>
+        </product>
+      </function>
+      <function name="aero/force/L0_fus">
+        <description> Fuselage lift at zero incidence, w/o downwash. </description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> aero/ref/area-ft2 </property>
+          <value> -0.05 </value>
+          <property> aero/coefficient/CDa90_fus </property>
+          <cos> <property> aero/alpha-rad </property> </cos>
+          <cos> <property> aero/alpha-rad </property> </cos>
+        </product>
+      </function>
+    </axis>
+
+    <axis name="DRAG">
+      <function name="aero/force/D0_wing">
+        <description> Drag on wing at zero lift. </description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> metrics/Sw-sqft </property>
+          <value> 0.025 </value>
+        </product>
+      </function>
+      <function name="aero/force/D0_fus">
+        <description> Fuselage drag. </description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> aero/ref/area-ft2 </property>
+          <property> aero/coefficient/CD0_fus </property>
+        </product>
+      </function>
+    </axis>
+
+    <axis name="SIDE">
+      <function name="aero/force/Yb_wing">
+        <description> Side force on wing due to beta. </description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> metrics/Sw-sqft </property>
+          <property> aero/beta-rad </property>
+          <value> -1.0 </value>
+          <value> 2.0 </value>
+          <sin> <property> aero/beta-rad </property> </sin>
+          <cos> <property> aero/beta-rad </property> </cos>
+        </product>
+      </function>
+    </axis>
+
+    <axis name="PITCH">
+      <function name="aero/moment/Ma_ht">
+        <description> Pitching moment due to tailplane lift. </description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> metrics/Sh-sqft </property>
+          <property> metrics/lh-ft </property>
+          <value>    -1.0 </value>
+          <value> 0.1 </value>
+        </product>
+      </function>
+    </axis>
+
+    <axis name="YAW">
+      <function name="aero/moment/Nb_vt">
+        <description> Yawing moment due to vertical fin. </description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> metrics/Sv-sqft </property>
+          <property> metrics/lv-ft </property>
+          <value> 0.1 </value>
+        </product>
+      </function>
+    </axis>
+
+  </aerodynamics>
+  
+</fdm_config>

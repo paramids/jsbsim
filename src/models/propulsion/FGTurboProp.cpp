@@ -48,6 +48,7 @@ INCLUDES
 #include "FGTurboProp.h"
 #include "FGPropeller.h"
 #include "FGRotor.h"
+#include "FGGearbox.h"
 #include "math/FGFunction.h"
 #include "input_output/FGXMLElement.h"
 
@@ -85,7 +86,15 @@ bool FGTurboProp::Load(FGFDMExec* exec, Element *el)
   }
 
   FGEngine::Load(exec, el);
-  thrusterType = Thruster->GetType();
+  // A gearbox-fed engine has no inline <thruster>, so Thruster is still
+  // nullptr here -- AssignGearboxThruster() only runs later, once
+  // FGPropulsion::Load() parses the <gearbox> that claims this engine.
+  // thrusterType is refreshed again at the top of Calculate() (by which
+  // point every engine's Thruster, gearbox-fed or not, is guaranteed
+  // set) specifically to cover that case; this Load()-time assignment
+  // stays guarded, not removed, so every pre-existing (non-gearbox)
+  // aircraft keeps the exact value it always had.
+  if (Thruster) thrusterType = Thruster->GetType();
 
   string property_prefix = CreateIndexedPropertyName("propulsion/engine", EngineNumber);
 
@@ -182,6 +191,12 @@ bool FGTurboProp::Load(FGFDMExec* exec, Element *el)
 void FGTurboProp::Calculate(void)
 {
   RunPreFunctions();
+
+  // See the comment at the equivalent Load()-time assignment: this
+  // refresh is what actually makes a gearbox-fed engine correct, since
+  // Thruster is only guaranteed non-null by the time Calculate() first
+  // runs, not at Load()-time.
+  thrusterType = Thruster->GetType();
 
   ThrottlePos = in.ThrottlePos[EngineNumber];
 
@@ -280,7 +295,15 @@ void FGTurboProp::Calculate(void)
   // Filters out negative powers when the propeller is not rotating.
   double power = HP * hptoftlbssec;
   if (RPM <= 0.1) power = max(power, 0.0);
-  Thruster->Calculate(power);
+  // A gearbox-fed engine hands its power to its channel instead of driving
+  // its (shared) Thruster directly -- the owning FGGearbox calls
+  // Thruster->Calculate() once, from summed channel torque, after every
+  // engine has run. See docs/interfaces/twin-engine-gearbox-interface.md
+  // section 3. Every other (non-gearbox) engine is unaffected.
+  if (FeedsGearbox())
+    GetGearbox()->SetChannelPower(EngineNumber, power);
+  else
+    Thruster->Calculate(power);
 
   RunPostFunctions();
 }

@@ -57,8 +57,11 @@ INCLUDES
 #include "models/propulsion/FGPiston.h"
 #include "models/propulsion/FGElectric.h"
 #include "models/propulsion/FGTurboProp.h"
+#include "models/propulsion/FGTurboshaft.h"
 #include "models/propulsion/FGTank.h"
 #include "models/propulsion/FGBrushLessDCMotor.h"
+#include "models/propulsion/FGGearbox.h"
+#include "models/propulsion/FGThruster.h"
 #include "models/FGFCS.h"
 
 
@@ -125,11 +128,35 @@ bool FGPropulsion::Run(bool Holding)
   vForces.InitMatrix();
   vMoments.InitMatrix();
 
+  // Pass 1: every engine computes its own power/thrust. A gearbox-fed
+  // engine's Calculate() hands its power to its FGGearbox channel instead
+  // of calling its (shared) Thruster->Calculate() itself -- see
+  // FGEngine::FeedsGearbox() and docs/interfaces/
+  // twin-engine-gearbox-interface.md section 3. Its shared thruster has not
+  // been updated yet this frame, so its forces/moments are deliberately
+  // NOT summed here (they would be stale, and summing them once per
+  // feeding engine would double-count a thruster shared by several
+  // engines); they are summed once per gearbox in pass 2 instead.
+  //
+  // For every pre-existing (non-gearbox) aircraft, FeedsGearbox() is always
+  // false, so this loop is exactly the original single-pass loop.
   for (auto& engine: Engines) {
     engine->Calculate();
     ConsumeFuel(engine.get());
-    vForces  += engine->GetBodyForces();  // sum body frame forces
-    vMoments += engine->GetMoments();     // sum body frame moments
+    if (!engine->FeedsGearbox()) {
+      vForces  += engine->GetBodyForces();  // sum body frame forces
+      vMoments += engine->GetMoments();     // sum body frame moments
+    }
+  }
+
+  // Pass 2: each gearbox resolves its combined shaft RPM from the summed,
+  // free-wheel/clutch-limited torque of its channels, and drives its
+  // shared thruster's Calculate() exactly once. Empty for every aircraft
+  // with no <gearbox> configured.
+  for (auto& gearbox: Gearboxes) {
+    gearbox->Calculate(in.TotalDeltaT);
+    vForces  += gearbox->GetThruster()->GetBodyForces();
+    vMoments += gearbox->GetThruster()->GetMoments();
   }
 
   TotalFuelQuantity = 0.0;
@@ -281,7 +308,22 @@ bool FGPropulsion::GetSteadyState(void)
     // reach a steady state.
     in.TotalDeltaT = 0.5;
 
+    // Pass 1: engines that own their own thruster converge exactly as
+    // before this function was made gearbox-aware. A gearbox-fed engine's
+    // Calculate() only stages power into its FGGearbox channel (see
+    // FGEngine::FeedsGearbox()) and never advances the shared thruster, so
+    // its own GetThrust() would never change here and its forces/moments
+    // must not be summed in this pass -- summing them once per feeding
+    // engine would double-count a thruster shared by several engines,
+    // exactly the bug the Run() pass-2 split (see the comment there) exists
+    // to avoid. Gearbox-fed engines are converged together with their
+    // gearbox in pass 2 below instead.
+    //
+    // For every non-gearbox aircraft, FeedsGearbox() is always false, so
+    // this loop is exactly the original single-pass loop.
     for (auto& engine: Engines) {
+      if (engine->FeedsGearbox()) continue;
+
       steady=false;
       steady_count=0;
       j=0;
@@ -301,6 +343,42 @@ bool FGPropulsion::GetSteadyState(void)
       }
       vForces  += engine->GetBodyForces();  // sum body frame forces
       vMoments += engine->GetMoments();     // sum body frame moments
+    }
+
+    // Pass 2: each gearbox's feeding engines are driven to convergence
+    // together with the gearbox itself -- the shared thruster only ever
+    // advances when FGGearbox::Calculate() runs, so it must be called every
+    // iteration alongside its feeding engines' Calculate(), mirroring the
+    // two-pass split in FGPropulsion::Run(). Convergence is judged on the
+    // shared thruster's thrust, then its forces/moments are summed exactly
+    // once. Empty for every aircraft with no <gearbox> configured.
+    for (auto& gearbox: Gearboxes) {
+      FGThruster* thruster = gearbox->GetThruster();
+
+      steady=false;
+      steady_count=0;
+      j=0;
+      currentThrust = 0; lastThrust = -1;
+      while (!steady && j < 6000) {
+        for (auto& engine: Engines)
+          if (engine->GetGearbox() == gearbox.get()) engine->Calculate();
+
+        gearbox->Calculate(in.TotalDeltaT);
+
+        lastThrust = currentThrust;
+        currentThrust = thruster->GetThrust();
+        if (fabs(lastThrust-currentThrust) < 0.0001) {
+          steady_count++;
+          if (steady_count > 120) {
+            steady=true;
+          }
+        } else {
+          steady_count=0;
+        }
+        j++;
+      }
+      vForces  += thruster->GetBodyForces();  // sum body frame forces
+      vMoments += thruster->GetMoments();     // sum body frame moments
     }
 
     FDMExec->SetTrimStatus(TrimMode);
@@ -385,22 +463,29 @@ bool FGPropulsion::Load(Element* el)
   ReadingEngine = true;
   Element* engine_element = el->FindElement("engine");
   unsigned int numEngines = 0;
+  // Parallel to Engines, so the "no thruster" check below can attribute its
+  // error to the specific offending <engine> element rather than the whole
+  // <propulsion> element (matches FGGearbox's own validation, which always
+  // points at the precise element -- see FGGearbox.cpp).
+  std::vector<Element*> engine_elements;
 
   while (engine_element) {
     if (!ModelLoader.Open(engine_element)) return false;
 
     try {
-      // Locate the thruster definition
+      // Locate the thruster definition. It is optional at this point: an
+      // engine with no inline <thruster> is only valid if some <gearbox>
+      // (parsed below, after all engines) claims it via <input
+      // engine="x">. That is checked once, after both loops, below --
+      // this keeps every existing aircraft (which always has an inline
+      // <thruster>) on the exact same path it has today.
       Element* thruster_element = engine_element->FindElement("thruster");
-      if (!thruster_element) {
-        XMLLogException err(FDMExec->GetLogger(), engine_element);
-        err << "No thruster definition supplied with engine definition.";
-        throw err;
-      }
-      if (!ModelLoader.Open(thruster_element)) {
-        XMLLogException err(FDMExec->GetLogger(), thruster_element);
-        err << "Cannot open the thruster element.";
-        throw err;
+      if (thruster_element) {
+        if (!ModelLoader.Open(thruster_element)) {
+          XMLLogException err(FDMExec->GetLogger(), thruster_element);
+          err << "Cannot open the thruster element.";
+          throw err;
+        }
       }
 
       if (engine_element->FindElement("piston_engine")) {
@@ -412,6 +497,9 @@ bool FGPropulsion::Load(Element* el)
       } else if (engine_element->FindElement("turboprop_engine")) {
         Element *element = engine_element->FindElement("turboprop_engine");
         Engines.push_back(make_shared<FGTurboProp>(FDMExec, element, numEngines, in));
+      } else if (engine_element->FindElement("turboshaft_engine")) {
+        Element *element = engine_element->FindElement("turboshaft_engine");
+        Engines.push_back(make_shared<FGTurboshaft>(FDMExec, element, numEngines, in));
       } else if (engine_element->FindElement("rocket_engine")) {
         Element *element = engine_element->FindElement("rocket_engine");
         Engines.push_back(make_shared<FGRocket>(FDMExec, element, numEngines, in));
@@ -441,9 +529,70 @@ bool FGPropulsion::Load(Element* el)
       return false;
     }
 
+    engine_elements.push_back(engine_element);
     numEngines++;
 
     engine_element = el->FindNextElement("engine");
+  }
+
+  // Parse <gearbox> elements (additive, strictly opt-in -- see
+  // docs/interfaces/twin-engine-gearbox-interface.md section 1). Each
+  // references one or more of the engines just loaded, by index, via
+  // <input engine="x">, and constructs/owns its own shared <thruster>.
+  // Gearboxes must appear after every <engine> they reference.
+  ReadingEngine = true; // thruster file="..." still resolves like an engine's
+  Element* gearbox_element = el->FindElement("gearbox");
+  unsigned int numGearboxes = 0;
+
+  while (gearbox_element) {
+    try {
+      Element* thruster_element = gearbox_element->FindElement("thruster");
+      if (!thruster_element) {
+        XMLLogException err(FDMExec->GetLogger(), gearbox_element);
+        err << "No <thruster> definition supplied with <gearbox> definition.";
+        throw err;
+      }
+      if (!ModelLoader.Open(thruster_element)) {
+        XMLLogException err(FDMExec->GetLogger(), thruster_element);
+        err << "Cannot open the gearbox thruster element.";
+        throw err;
+      }
+
+      Gearboxes.push_back(make_shared<FGGearbox>(FDMExec, gearbox_element,
+                                                   numGearboxes, Engines));
+    } catch (XMLLogException& err) {
+      err << "Cannot load " << Name << "\n";
+      return false;
+    } catch (LogException& e) {
+      XMLLogException err(e, gearbox_element);
+      err << "Cannot load " << Name << "\n";
+      return false;
+    } catch (const BaseException& e) {
+      FGXMLLogging err(FDMExec->GetLogger(), gearbox_element, LogLevel::FATAL);
+      err << "\n" << LogFormat::RED << e.what() << LogFormat::RESET
+          << "\nCannot load " << Name << "\n";
+      return false;
+    }
+
+    numGearboxes++;
+
+    gearbox_element = el->FindNextElement("gearbox");
+  }
+
+  // Every engine must end up with a thruster: either its own inline
+  // <thruster> (the path every pre-existing aircraft takes, entirely
+  // unaffected by the above), or one assigned by a <gearbox>'s <input>.
+  // Catches an engine that has neither -- e.g. a typo'd engine index in
+  // <input>, or a <gearbox> that was simply forgotten.
+  for (unsigned int i = 0; i < Engines.size(); i++) {
+    if (!Engines[i]->GetThruster()) {
+      XMLLogException err(FDMExec->GetLogger(), engine_elements[i]);
+      err << "Engine " << i << " (" << Engines[i]->GetName() << ") has no "
+          << "<thruster> definition and is not referenced by any <gearbox> "
+          << "<input engine=\"" << i << "\">.";
+      err << "\nCannot load " << Name << "\n";
+      return false;
+    }
   }
 
   if (numEngines) bind();

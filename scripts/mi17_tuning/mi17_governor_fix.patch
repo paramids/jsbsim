@@ -1,0 +1,36 @@
+diff --git a/aircraft/mi17/Systems/rpm_governor.xml b/aircraft/mi17/Systems/rpm_governor.xml
+index 3d70b99..8b279a0 100644
+--- a/aircraft/mi17/Systems/rpm_governor.xml
++++ b/aircraft/mi17/Systems/rpm_governor.xml
+@@ -19,9 +19,13 @@
+        during spin-up; near target-rpm a few-percent error gives a
+        correspondingly small trim, with ki slowly removing any
+        remaining steady-state droop. -->
+-  <property value="2.5"> governor/gain </property>
+-  <property value="0.3"> governor/integral-gain </property>
+-  <property value="0.1"> governor/derivative-gain </property>
++  <!-- Hip tuning (was 2.5 / 0.3 / 0.1, no feedforward): the rotor sagged to ~0.91 on a collective step and
++       overshot to ~1.08 on release. Higher gains plus a collective feedforward (the engine reacts to the collective
++       before the rpm has dropped) keep it within about 0.96..1.03 in the standalone collective-step test. -->
++  <property value="4.0"> governor/gain </property>
++  <property value="1.0"> governor/integral-gain </property>
++  <property value="0.3"> governor/derivative-gain </property>
++  <property value="1.2"> governor/collective-feedforward </property>
+   <property value="1.0"> governor/enabled </property>
+ 
+   <!-- RPM control -->
+@@ -106,7 +110,13 @@
+     <fcs_function name="governor/throttle-output">
+       <function>
+         <product>
+-          <property> governor/pid-output </property>
++          <sum>
++            <property> governor/pid-output </property>
++            <product>
++              <property> fcs/collective-cmd-norm </property>
++              <property> governor/collective-feedforward </property>
++            </product>
++          </sum>
+           <property> governor/enabled </property>
+         </product>
+       </function>

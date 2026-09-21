@@ -1,0 +1,110 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="http://jsbsim.sf.net/JSBSimScript.xsl"?>
+<runscript
+       name="Mi-17 twin-engine FGGearbox validation (steady state, both engines)"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="http://jsbsim.sf.net/JSBSimScript.xsd">
+
+  <description>
+    Validates aircraft/mi17 (two TV3-117MT-equivalent turboprop_engine
+    sides, mi17_main_engine_1/2, combined through the gearbox element
+    named mi17-main-gearbox into the single mi17_main_rotor thruster)
+    on feature/REQ-003-fggearbox. Same pattern as this repo's own
+    scripts/test_gearbox_steadystate.xml (aircraft/gearbox_test), but
+    against the real Mi-17 config instead of the throwaway fixture.
+
+    Starting both engines (propulsion/set-running=-1) triggers
+    FGPropulsion::InitRunning(-1) -> SetEngineRunning() for both engines
+    (which also forces full throttle) -> GetSteadyState(). What to check
+    in the notified properties once settled:
+
+      - shaft-rpm should spin up under combined torque and stabilize
+        (not diverge/oscillate) -- compare against nominal main rotor
+        RPM x gearratio, i.e. 270 x 18.5 = ~4995, per mi17_main_rotor.xml
+        (see its own comments; not asserted numerically here since the
+        exact operating point depends on gearbox friction/load not
+        modeled in these throwaway table values).
+      - engine[0] and engine[1] output-torque-lbft should be
+        approximately equal (both sides feed one shared shaft
+        symmetrically) and non-zero -- unequal values would indicate
+        the double-counting bug GetSteadyState() was fixed for
+        (REQ-003 review MAJOR #1) has regressed.
+      - engine[0]/thrust-lbs must NOT read as double the true combined
+        single-rotor thrust -- there is exactly one physical main rotor.
+      - one-engine-inoperative should read false/0 with both engines
+        healthy; see test_mi17_gearbox_oei.xml for the failure case.
+
+    Collective is pinned flat (fcs/collective-cmd-norm=0 and the
+    fcs/adj/collective-bias default of 0.15 rad zeroed too) throughout
+    -- a ground run, not a flight test. This validates the gearbox/
+    propulsion mechanism in isolation from flight dynamics; without
+    it, the engines now make enough power for an uncontrolled liftoff
+    (thrust up to ~35000 lbs observed vs. this model's ~15000 lbs max
+    weight) that couples into an unrelated ground-contact instability
+    (*CRASH DETECTED* in the sim log) having nothing to do with the
+    propulsion model itself.
+  </description>
+
+  <use aircraft="mi17" initialize="reset00"/>
+
+  <run start="0.0" end="5.0" dt="0.0075">
+
+    <event name="Start both engines (triggers InitRunning -> GetSteadyState)" persistent="false">
+      <condition> simulation/sim-time-sec ge 0.0 </condition>
+      <set name="propulsion/set-running" value="-1"/>
+      <set name="fcs/collective-cmd-norm" value="0.0"/>
+      <set name="fcs/adj/collective-bias" value="0.0"/>
+      <notify>
+        <property> propulsion/gearbox[0]/shaft-rpm </property>
+        <property> propulsion/engine[0]/output-torque-lbft </property>
+        <property> propulsion/engine[1]/output-torque-lbft </property>
+        <property> propulsion/engine[0]/n1 </property>
+        <property> propulsion/engine[1]/n1 </property>
+        <property> propulsion/engine[0]/thrust-lbs </property>
+        <property> propulsion/gearbox[0]/one-engine-inoperative </property>
+      </notify>
+    </event>
+
+    <event name="Hold collective flat and throttle up (ground run)" persistent="true">
+      <!-- propulsion/set-running=-1 is a one-time start command, not a
+           held-throttle command: it forces ThrottlePos=1 for exactly one
+           frame, then normal fcs/throttle-cmd-norm processing (default
+           0.0, nothing else in this script commands it) overwrites that
+           and the engines decay back to idle over the next tens of
+           seconds. A real ground run also needs the throttle held open,
+           same as an engine start needs a pilot to keep advancing it. -->
+      <condition> simulation/sim-time-sec ge 0.0 </condition>
+      <set name="fcs/collective-cmd-norm" value="0.0"/>
+      <set name="fcs/adj/collective-bias" value="0.0"/>
+      <set name="fcs/throttle-cmd-norm[0]" value="1.0"/>
+      <set name="fcs/throttle-cmd-norm[1]" value="1.0"/>
+    </event>
+
+    <event name="Report at 2s" persistent="false">
+      <condition> simulation/sim-time-sec ge 2.0 </condition>
+      <notify>
+        <property> propulsion/gearbox[0]/shaft-rpm </property>
+        <property> propulsion/engine[0]/rotor-rpm </property>
+        <property> propulsion/engine[2]/rotor-rpm </property>
+        <property> propulsion/engine[0]/output-torque-lbft </property>
+        <property> propulsion/engine[1]/output-torque-lbft </property>
+        <property> propulsion/engine[0]/thrust-lbs </property>
+      </notify>
+    </event>
+
+    <event name="Report at settling (4s)" persistent="false">
+      <condition> simulation/sim-time-sec ge 4.0 </condition>
+      <notify>
+        <property> propulsion/gearbox[0]/shaft-rpm </property>
+        <property> propulsion/engine[0]/rotor-rpm </property>
+        <property> propulsion/engine[2]/rotor-rpm </property>
+        <property> propulsion/engine[0]/output-torque-lbft </property>
+        <property> propulsion/engine[1]/output-torque-lbft </property>
+        <property> propulsion/engine[0]/thrust-lbs </property>
+        <property> propulsion/gearbox[0]/one-engine-inoperative </property>
+      </notify>
+    </event>
+
+  </run>
+
+</runscript>
