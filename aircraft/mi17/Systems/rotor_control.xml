@@ -181,7 +181,7 @@
   <!-- - - - - - - - - - - - - - - - - -
           collective
        - - - - - - - - - - - - - - - - - -->
-  <property value='0.25'> fcs/adj/collective-gain </property>
+  <property value='0.16'> fcs/adj/collective-gain </property>
   <property value='0.15'> fcs/adj/collective-bias </property>
 
   <channel name="collective">
@@ -294,7 +294,10 @@
           lateral
        - - - - - - - - - - - - - - - - - -->
   <property value='0.06'> fcs/adj/lateral-gain </property>
-  <property value='0.00'> fcs/adj/lateral-bias </property>
+  <!-- Hover trim of the lateral cyclic: the tail rotor pushes the helicopter sideways and the rotor is tilted against it.
+       Found by latching the cyclic the attitude hold used in a steady hover (-0.0203 rad); with a neutral stick the
+       aircraft then hovers hands-off (helifdm rigged hover trial). -->
+  <property value='-0.0203'> fcs/adj/lateral-bias </property>
 
   <property value='1.00'> fcs/adj/lateral-col-mix-infl </property>
   <property value='-0.12'> fcs/adj/lateral-col-mix-gain </property>
@@ -368,7 +371,10 @@
           pedal/antitorque
        - - - - - - - - - - - - - - - - - -->
   <property value='0.20'> fcs/adj/pedal-gain </property>
-  <property value='0.00'> fcs/adj/pedal-bias </property>
+  <!-- Hover trim of the pedal: neutral pedal balances the main rotor torque at hover (-0.12 rad of tail rotor pitch on top of
+       the torque feedforward). It used to come from the yaw-rate integrator in afcs.xml. Without it the aircraft spins
+       at -15 deg/s with a neutral pedal. -->
+  <property value='0.0'> fcs/adj/pedal-bias </property>
 
   <property value='1.00'> fcs/adj/pedal-col-mix-infl </property>
   <!-- Antitorque gain history (collective-position feedforward, now
@@ -448,8 +454,15 @@
        below for the corrected clamp values). Resolved so the true
        20.5 deg / 0.358 rad ceiling maps to 27500 ft-lb instead:
        gain = (0.358 - bias) / 27500 ~= 0.0000174 rad per ft-lb. -->
-  <property value='0.0000174'> fcs/adj/pedal-torque-mix-gain </property>
-  <property value='-0.12'> fcs/adj/pedal-col-mix-bias </property>
+  <!-- Reduced from 0.0000174 to 0.0000087: the original put the feedforward at the tail rotor clamp (0.358 rad)
+       at hover torque, but the tail rotor balances hover torque at about 0.12 to 0.2 rad (measured by pinning
+       the tail rotor pitch; see scripts/mi17_tuning/REPORT.md in the Sim/jsbsim repo). -->
+  <!-- Pedal rigging, rewritten for the rigged controls: the tail rotor pitch is PROPORTIONAL to the main rotor torque (gain 3.1e-6 rad per ft-lb,
+       about 0.14 rad at the 45000 ft-lb of hover) with no offset, so a neutral pedal balances the torque from ground idle to a hard climb
+       (neutral-pedal yaw rate within 2.5 deg/s for collective 0.05 to 0.50; the old 8.7e-6 with a -0.24 offset gave +8 deg/s on the ground and -21 deg/s
+       in a climb; helifdm yaw trial). Backup: backups/rotor_control.xml.before_pedal_ff. -->
+  <property value='0.0000031'> fcs/adj/pedal-torque-mix-gain </property>
+  <property value='0.0'> fcs/adj/pedal-col-mix-bias </property>
 
   <channel name="pedal">
 

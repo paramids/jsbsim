@@ -19,9 +19,18 @@
        during spin-up; near target-rpm a few-percent error gives a
        correspondingly small trim, with ki slowly removing any
        remaining steady-state droop. -->
-  <property value="2.5"> governor/gain </property>
-  <property value="0.3"> governor/integral-gain </property>
-  <property value="0.1"> governor/derivative-gain </property>
+  <!-- Hip tuning (was 2.5 / 0.3 / 0.1, no feedforward): the rotor sagged to ~0.91 on a collective step and
+       overshot to ~1.08 on release. Higher gains plus a collective feedforward (the engine reacts to the collective
+       before the rpm has dropped) keep it within about 0.96..1.03 in the standalone collective-step test. -->
+  <!-- Feedforward retuned 1.2 -> 0.4 after the collective gain was lowered (0.25 -> 0.16). The steady throttle needs only
+       about 0.3 per unit of collective, and the rotor's load follows the collective more slowly than the throttle does,
+       so 1.2 overspeeded the rotor on a pull (1.084) and let it droop on a release (0.933). With 0.4, pilot-rate
+       collective ramps (0.15 per second, helifdm calibrate) stay within 0.978..1.020 and the collective step within
+       0.994..1.010. Higher PID gains tighten the ramp a little more but make the engine start worse. -->
+  <property value="4.0"> governor/gain </property>
+  <property value="1.0"> governor/integral-gain </property>
+  <property value="0.3"> governor/derivative-gain </property>
+  <property value="0.4"> governor/collective-feedforward </property>
   <property value="1.0"> governor/enabled </property>
 
   <!-- RPM control -->
@@ -106,7 +115,13 @@
     <fcs_function name="governor/throttle-output">
       <function>
         <product>
-          <property> governor/pid-output </property>
+          <sum>
+            <property> governor/pid-output </property>
+            <product>
+              <property> fcs/collective-cmd-norm </property>
+              <property> governor/collective-feedforward </property>
+            </product>
+          </sum>
           <property> governor/enabled </property>
         </product>
       </function>

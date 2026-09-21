@@ -18,10 +18,38 @@
   <property value="1.0"> ap/stability-aug-on </property>
 
   <!-- AFCS gains -->
-  <property value="0.5"> ap/pitch-gain </property>
+  <!-- ap/pitch-gain sign corrected from +0.5 to -0.5: positive elevator command pitches the nose DOWN in this
+       model, so the pitch attitude hold has to command the opposite sign of the pitch error. With +0.5 it was
+       positive feedback (masked while the aircraft spun fast in yaw). See scripts/mi17_tuning/REPORT.md. -->
+  <property value="-0.5"> ap/pitch-gain </property>
   <property value="0.5"> ap/roll-gain </property>
   <property value="0.3"> ap/yaw-gain </property>
   <property value="0.4"> ap/collective-gain </property>
+  <!-- Stability augmentation gains, promoted from constants inside the SAS functions below (same values) so they can be
+       tuned by name (helifdm tune) and overridden from a script. Pitch and roll: command per rad/s of body rate;
+       yaw: command per rad/s of yaw-rate error, and the rate of the yaw-rate integrator. -->
+  <!-- Rate damper gains, raised from 0.1 to 0.3 for the rigged controls (helifdm hover trials, neutral stick): with 0.1 the
+       hands-off hover wanders up to 9 deg in pitch and 6 deg in roll, with 0.3 about 5 deg, and without the damper the
+       aircraft rolls over. The damper also sets how the stick feels: a steady stick deflection gives a steady rate of about
+       stick (rad) / gain, so full longitudinal stick (0.15 rad) is about 29 deg/s. Its authority is limited to
+       +-ap/sas-authority-rad (0.06 rad, about 40 % of the longitudinal stick travel) of cyclic, like a series damper actuator. -->
+  <!-- Authority of the pitch and roll rate dampers, rad of cyclic each way (about 40 % of the longitudinal stick travel). -->
+  <property value="0.06"> ap/sas-authority-rad </property>
+  <property value="0.3"> ap/sas-pitch-rate-gain </property>
+  <property value="-0.3"> ap/sas-roll-rate-gain </property>
+  <property value="0.25"> ap/sas-yaw-rate-gain </property>
+  <!-- RIGGED CONTROLS (default): the stick drives the swashplate and the pedal the tail rotor through the rigging in
+       rotor_control.xml, with no attitude, heading, altitude or speed hold. What is left of the AFCS is the rate damper
+       (ap/stability-aug-on: pitch, roll and yaw rate feedback, like the real AP-34B damping channel), and it can be
+       switched off. The two settings below turn the older yaw behaviour off: the yaw-rate command (the pedal was a
+       requested yaw rate) and the yaw-rate integrator (it held zero yaw rate, a heading-hold-like autopilot action).
+       The hover trim that the integrator used to supply now comes from the rigging (fcs/adj/pedal-bias,
+       fcs/adj/lateral-bias). The old behaviour: ap/sas-yaw-integral-gain 0.2, ap/yaw-rate-per-pedal 1.5 (full pedal
+       about 86 deg/s), ap/attitude-hold-on 1. -->
+  <property value="0.0"> ap/sas-yaw-integral-gain </property>
+  <!-- Yaw-rate command: rad/s of yaw rate per unit of pedal (fcs/rudder-cmd-norm; negative = yaw right).
+       0 = the pedal is a plain direct input to the tail rotor pitch (rigged). -->
+  <property value="0.0"> ap/yaw-rate-per-pedal </property>
   <!-- Declared at system scope, not inside the "altitude hold"
        channel below where it's used: a <property> element nested
        inside a <channel> is not registered in time for a same-
@@ -83,6 +111,14 @@
        attitude" latch) actually sets these. -->
   <property value="0.0"> ap/pitch-target-rad </property>
   <property value="0.0"> ap/roll-target-rad </property>
+  <!-- Bank trim into the tail rotor's side force. The tail rotor pushes the whole helicopter sideways (about 4% of the
+       weight in a hover); with the attitude hold keeping the roll level nothing balanced it and a neutral stick
+       accelerated sideways at 0.37 m/s2 (20 m/s after a minute). A real helicopter hovers with a couple of degrees of
+       bank into it. The roll target is offset by this many radians of bank per radian of tail rotor pitch (the tail
+       thrust follows its pitch, so it stays right as the power changes). 0.58 cancels the drift from a low hover to a
+       hard climb (0.001..0.010 m/s2) and hovers with about 2.5 degrees of bank (helifdm-tool drift test). Set to 0 to
+       remove it. -->
+  <property value="0.58"> ap/roll-trim-per-tail-rad </property>
   <property value="0.0"> ap/heading-target-rad </property>
   <property value="0.0"> ap/altitude-target-ft </property>
   <property value="0.0"> ap/speed-target-fps </property>
@@ -99,10 +135,23 @@
       </function>
     </fcs_function>
 
+    <fcs_function name="ap/roll-trim-rad">
+      <function>
+        <product>
+          <value> -1.0 </value>
+          <property> ap/roll-trim-per-tail-rad </property>
+          <property> propulsion/engine[2]/antitorque-ctrl-rad </property>
+        </product>
+      </function>
+    </fcs_function>
+
     <fcs_function name="ap/roll-error-rad">
       <function>
         <difference>
-          <property> ap/roll-target-rad </property>
+          <sum>
+            <property> ap/roll-target-rad </property>
+            <property> ap/roll-trim-rad </property>
+          </sum>
           <property> attitude/roll-rad </property>
         </difference>
       </function>
@@ -319,28 +368,71 @@
       <function>
         <product>
           <property> velocities/q-rad_sec </property>
-          <value> -0.1 </value>
+          <!-- sign corrected from -0.1 to +0.1 (pitch rate damper; same convention as ap/pitch-gain above) -->
+          <property> ap/sas-pitch-rate-gain </property>
           <property> ap/stability-aug-on </property>
         </product>
       </function>
+      <clipto>
+        <min> -ap/sas-authority-rad </min>
+        <max>  ap/sas-authority-rad </max>
+      </clipto>
     </fcs_function>
 
     <fcs_function name="ap/sas-roll-cmd">
       <function>
         <product>
           <property> velocities/p-rad_sec </property>
-          <value> -0.1 </value>
+          <property> ap/sas-roll-rate-gain </property>
           <property> ap/stability-aug-on </property>
         </product>
       </function>
+      <clipto>
+        <min> -ap/sas-authority-rad </min>
+        <max>  ap/sas-authority-rad </max>
+      </clipto>
     </fcs_function>
 
+    <!-- Yaw stabiliser: sign corrected from -0.05 to +0.4, plus a yaw-rate integrator. With the tail rotor's
+         in-flight sensitivity (about -25 rad/s per rad of pitch) the original sign was positive feedback and
+         latched the hover yaw at the tail rotor clamp (about -4.5 rad/s). The integrator (clipped +-0.3 rad)
+         removes the residual steady-state yaw. Together with the pitch-channel sign fixes above and
+         fcs/adj/pedal-torque-mix-gain = 0.0000087 (rotor_control.xml), hover yaw is about 0.005 rad/s.
+         See scripts/mi17_tuning/REPORT.md in the Sim/jsbsim repo. -->
+    <!-- Yaw-rate command mode: the stabiliser tracks a yaw rate requested by the pilot instead of always
+         holding zero. Error = actual yaw rate minus the requested rate, and the requested rate is
+         -ap/yaw-rate-per-pedal * fcs/rudder-cmd-norm (negative pedal command = yaw right). With the pedal
+         centred this reduces to the plain yaw-rate hold above. -->
+    <fcs_function name="ap/yaw-rate-error">
+      <function>
+        <sum>
+          <property> velocities/r-rad_sec </property>
+          <product>
+            <property> fcs/rudder-cmd-norm </property>
+            <property> ap/yaw-rate-per-pedal </property>
+          </product>
+        </sum>
+      </function>
+    </fcs_function>
+    <integrator name="ap/sas-yaw-integral">
+      <input> ap/yaw-rate-error </input>
+      <c1> ap/sas-yaw-integral-gain </c1>
+      <clipto>
+        <min> -0.3 </min>
+        <max>  0.3 </max>
+      </clipto>
+    </integrator>
     <fcs_function name="ap/sas-yaw-cmd">
       <function>
         <product>
-          <property> velocities/r-rad_sec </property>
-          <value> -0.05 </value>
           <property> ap/stability-aug-on </property>
+          <sum>
+            <product>
+              <property> ap/yaw-rate-error </property>
+              <property> ap/sas-yaw-rate-gain </property>
+            </product>
+            <property> ap/sas-yaw-integral </property>
+          </sum>
         </product>
       </function>
     </fcs_function>

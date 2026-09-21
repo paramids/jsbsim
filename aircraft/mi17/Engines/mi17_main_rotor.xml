@@ -162,7 +162,7 @@
        (buffeting). Hover induced velocity of this rotor at gross weight is about 33 ft/s (2000 ft/min).
          strength       multiplies the inflow increase of the fit over momentum theory (0 = no mean effect, only buffeting). A game-feel
                         knob, not calibrated to flight test data: at collective 0.03 the sink rate at gross weight is -24 ft/s with 0,
-                        -31 with 2, -35 with 3 (this value), -45 with 4 and a runaway to -50 ft/s from 6 up.
+                        -31 with 2, -35 with 3 (this value), -45 with 4 and a runaway to -50 ft/s from 6 up (helifdm vortex ring trials).
          mu_start/end   in-plane speed / tip speed (0.04 = about 17 kt) between which the effect fades out
          buffet_thrust  relative thrust fluctuation at full depth
          buffet_flap    fluctuation of the rotor flapping [degrees] at full depth: rocks the aircraft in pitch and roll

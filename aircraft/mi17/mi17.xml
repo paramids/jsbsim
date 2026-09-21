@@ -50,12 +50,12 @@
     <vtailarm unit="FT">          22.0 </vtailarm>         <!-- metrics/lv-ft    -->
 
     <location name="AERORP" unit="IN">
-       <x> 200.0 </x>
+       <x> 135.00 </x>
        <y>   0.0 </y>
        <z>  60.0 </z>
     </location>
     <location name="EYEPOINT" unit="IN">
-       <x> 150.0 </x>
+       <x> 85.00 </x>
        <y>   0.0 </y>
        <z>  90.0 </z>
     </location>
@@ -152,8 +152,16 @@
          formula is explicitly X-coordinate only); left as previous
          placeholders, not yet sourced. -->
     <emptywt unit="LBS">   16129.0 </emptywt>
+    <!-- Airframe moved 65 in FORWARD relative to the landing gear: this CG (was x=203.70), AERORP and EYEPOINT (were
+         200 / 150), the main rotor thruster (was 200), the tail rotor thruster (was 580), the tail bumper (was 600)
+         and the fuel tanks (were 251.97 / 200.98 / 200.98) all shifted by -65 in in x, so their positions relative to
+         each other (CG 3.7 in aft of the mast, inertia, tail arm) are unchanged. The gear contacts and VRP were not
+         moved. Reason: with the CG 23.7 in aft of the main gear the aircraft rested 6.3 deg nose up on the tail
+         bumper; it now rests level (pitch 0.0 deg, helifdm lint rest_attitude) and, matching the mesh, the CG sits
+         about 1.2 m ahead of the main wheels. Other comments in this file that quote x positions (component
+         masses "at x=200", "main_gear at x=180", "tail rotor x=580") still use the old numbers. -->
     <location name="CG" unit="IN">
-      <x>   203.70 </x>
+      <x>   138.70 </x>
       <y>     0.0 </y>
       <z>    80.0 </z>
     </location>
@@ -226,7 +234,7 @@
     </contact>
     <contact type="STRUCTURE" name="tail_bumper">
       <location unit="IN">
-        <x>   600.0 </x>
+        <x>   535.00 </x>
         <y>     0.0 </y>
         <z>    50.0 </z>
       </location>
@@ -291,7 +299,7 @@
 
       <thruster file="mi17_main_rotor">
         <location unit="IN">
-          <x>   200.0 </x>
+          <x>   135.00 </x>
           <y>     0.0 </y>
           <z>   180.0 </z>
         </location>
@@ -311,7 +319,7 @@
       <feed>2</feed>
       <thruster file="mi17_tail_rotor">
         <location unit="IN">
-          <x> 580.0 </x>
+          <x> 515.00 </x>
           <y>  20.0 </y>
           <z> 140.0 </z>
         </location>
@@ -382,7 +390,7 @@
          sourced. -->
     <tank number="0" type="FUEL">
       <location unit="IN">
-        <x>   251.97 </x>
+        <x>   186.97 </x>
         <y>     0.0 </y>
         <z>    45.0 </z>
       </location>
@@ -392,7 +400,7 @@
     </tank>
     <tank number="1" type="FUEL">
       <location unit="IN">
-        <x>   200.98 </x>
+        <x>   135.98 </x>
         <y>    40.0 </y>
         <z>    45.0 </z>
       </location>
@@ -402,7 +410,7 @@
     </tank>
     <tank number="2" type="FUEL">
       <location unit="IN">
-        <x>   200.98 </x>
+        <x>   135.98 </x>
         <y>   -40.0 </y>
         <z>    45.0 </z>
       </location>
