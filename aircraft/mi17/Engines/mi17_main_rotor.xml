@@ -171,9 +171,9 @@
     <strength>       3.0  </strength>
     <mu_start>       0.04 </mu_start>
     <mu_end>         0.08 </mu_end>
-    <buffet_thrust>  0.10 </buffet_thrust>
-    <buffet_flap>    1.0  </buffet_flap>
-    <buffet_hz>      0.6  </buffet_hz>
+    <buffet_thrust>  0.35  </buffet_thrust>
+    <buffet_flap>    5.0    </buffet_flap>
+    <buffet_hz>      1.0    </buffet_hz>
   </vortexring>
 
 </rotor>
