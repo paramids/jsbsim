@@ -394,6 +394,7 @@ private:
   double GroundEffectExp;
   double GroundEffectShift;
   double GroundEffectScaleNorm;
+  bool   GroundEffectOnTarget; // ground effect scales the inflow target, not nu on every step (see calc_flow_and_thrust)
 
   // vortex ring state (optional, configured by <vortexring>; see calc_vortex_ring())
   bool   VortexRingEnabled;

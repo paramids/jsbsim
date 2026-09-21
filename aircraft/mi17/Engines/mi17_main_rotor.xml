@@ -152,9 +152,18 @@
        remains a candidate to revisit once this is validated. -->
   <hingeoffset unit="FT">           0.72178 </hingeoffset>
 
-  <!-- Ground effect for Mi-17 -->
-  <groundeffectexp>                     0.15 </groundeffectexp>
-  <groundeffectshift unit="FT">           12 </groundeffectshift>
+  <!-- Ground effect for the Mi-17 (helifdm ground effect trials, 2026-09). The factor ge(h) = 1 - exp(-(h + shift) * exp) is the ratio of
+       the induced velocity at fixed thrust, h being the height of the CG above the ground. exp 0.075 and shift 9 ft follow the standard rotor
+       ground effect curve (Cheeseman and Bennett, 1 - (R / 4z)^2 with the hub about 9 ft above the CG): 0.69 at the rest height (6 ft), 0.93 at 25 ft,
+       0.97 at 40 ft, none beyond about 70 ft (one rotor diameter). The model's own fade with airspeed (aero/groundeffect-scale in mi17.xml)
+       removes it above about 30 kt.
+       groundeffecttarget 1: the factor is applied to the inflow target once. The classic form (no element) applies it to the inflow on every
+       step, so it compounds and the real effect depends on the time step: the old values 0.15 and 12 ft gave an inflow of x0.51 at 11 ft
+       and x0.86 at 22 ft where the factor itself said 0.97 to 0.99. Needs a JSBSim.dll with this element (an older one ignores it and
+       then applies these values in the classic form, which is far too strong). -->
+  <groundeffectexp>                     0.075 </groundeffectexp>
+  <groundeffectshift unit="FT">           9 </groundeffectshift>
+  <groundeffecttarget>                     1 </groundeffecttarget>
 
   <!-- Vortex ring state (FGRotor::calc_vortex_ring). In a power-on descent at low forward speed the rotor sinks into its
        own wake: the induced velocity is higher than momentum theory says (Johnson's empirical fit is used for

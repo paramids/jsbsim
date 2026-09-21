@@ -84,7 +84,7 @@ FGRotor::FGRotor(FGFDMExec *exec, Element* rotor_element, int num)
     BladeChord(0.0), LiftCurveSlope(0.0), BladeTwist(0.0), HingeOffset(0.0),
     BladeFlappingMoment(0.0), BladeMassMoment(0.0), PolarMoment(0.0),
     InflowLag(0.0), TipLossB(0.0),
-    GroundEffectExp(0.0), GroundEffectShift(0.0), GroundEffectScaleNorm(1.0),
+    GroundEffectExp(0.0), GroundEffectShift(0.0), GroundEffectScaleNorm(1.0), GroundEffectOnTarget(false),
     VortexRingEnabled(false), VortexStrength(1.0), VortexMuStart(0.04), VortexMuEnd(0.08),
     VortexBuffetThrust(0.0), VortexBuffetFlap(0.0), VortexBuffetHz(0.6),
     VortexDescentRatio(0.0), VortexDepth(0.0), VortexInflowScale(1.0),
@@ -353,6 +353,9 @@ double FGRotor::Configure(Element* rotor_element)
 
   GroundEffectExp = ConfigValue(rotor_element, "groundeffectexp", 0.0);
   GroundEffectShift = ConfigValueConv(rotor_element, "groundeffectshift", 0.0, "FT");
+  // <groundeffecttarget>1</groundeffecttarget>: the ground effect factor is applied to the inflow target once, instead of to
+  // the inflow on every step (which compounds, see calc_flow_and_thrust). Off by default: existing aircraft keep their tuning.
+  GroundEffectOnTarget = ConfigValue(rotor_element, "groundeffecttarget", 0.0) > 0.5;
 
   // Vortex ring state, off unless a <vortexring> element is present:
   //   <vortexring>
@@ -538,7 +541,17 @@ void FGRotor::calc_flow_and_thrust( double theta_0, double Uw, double Ww,
   // ref: dnu/dt = 1/tau ( Ct / (2*sqrt(mu^2+lambda^2))  -  nu )
   // taking mu and lambda constant, this integrates to
 
-  nu  = flow_scale * ((nu - c0) * exp(-dt/InflowLag) + c0);
+  if (GroundEffectOnTarget) {
+    // flow_scale is the ratio of the induced velocity at fixed thrust (1.0 = free air). In a hover nu follows sqrt(c0), so
+    // the target scales with the square of it, and the steady inflow ends up at flow_scale times the free-air value.
+    // Nothing compounds: the ratio does not depend on the time step or on the inflow lag.
+    c0 *= sqr(flow_scale);
+    nu  = (nu - c0) * exp(-dt/InflowLag) + c0;
+  } else {
+    // the classic form: flow_scale acts on nu on every step, so the steady inflow is far below flow_scale times the
+    // free-air value (about x0.23 for a scale of 0.98 with an inflow lag of 0.32 s and dt 0.0075 s)
+    nu  = flow_scale * ((nu - c0) * exp(-dt/InflowLag) + c0);
+  }
 
   // now from nu to lambda, C_T, and Thrust
 
