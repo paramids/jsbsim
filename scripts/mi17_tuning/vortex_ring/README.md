@@ -43,7 +43,7 @@ A descent from 590 ft at collective 0.03 (`descent_flight.py`), gross weight:
 | 4 | -38 | 5 ft |
 | 6 and up | -44 to -50 (runaway) | on the ground |
 
-Buffeting in the region (buffet_thrust 0.35, buffet_flap 5 degrees, 1.0 Hz; the first values 0.10 / 1 degree / 0.6 Hz were too weak in the game): the roll rate is about +/-16 deg/s, the pitch rate about +/-2.7 deg/s (the pitch inertia is 4 times the roll inertia) and the vertical acceleration swings about 0.6 g. Measured at a 30 ft/s sink.
+Buffeting in the region (buffet_thrust 0.5, buffet_flap 10 degrees, 1.0 Hz; the first values 0.10 / 1 degree / 0.6 Hz were too weak in the game): the roll rate is about +/-29 deg/s, the pitch rate about +/-5.8 deg/s (the game adds a depth-scaled camera shake, since the assist hold masks part of it) (the pitch inertia is 4 times the roll inertia) and the vertical acceleration swings about 0.6 g. Measured at a 30 ft/s sink.
 
 ## Building
 
